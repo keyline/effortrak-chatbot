@@ -1,0 +1,2 @@
+# Python is served by Uvicorn, never as static content through XAMPP/Apache.
+Require all denied
