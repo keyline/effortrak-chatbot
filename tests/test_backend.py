@@ -1,6 +1,7 @@
 import base64
 import json
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.auth import Identity
 from app.main import create_app
 
 
@@ -187,6 +189,45 @@ def backend(tmp_path):
 def test_invalid_delegation_rejected_before_backend(backend, changes):
     client, state = backend
     assert client.get('/v1/me', headers=headers(**changes)).status_code == 401
+    assert state['calls'] == []
+
+
+@pytest.mark.parametrize(('offset', 'status'), [(2, 200), (5, 200), (6, 401)])
+def test_delegated_clock_tolerance_is_bounded(backend, monkeypatch, offset, status):
+    client, state = backend
+    now = int(time.time())
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromtimestamp(now, timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(jwt.api_jwt, 'datetime', FixedClock)
+    verifier = AsyncMock(return_value=Identity(1, 101, 'Test employee', 'Employee', ('self',)))
+    client.app.state.backend.identity = verifier
+    response = client.get('/v1/me', headers=headers(iat=now + offset, exp=now + offset + 120))
+    assert response.status_code == status
+    assert verifier.await_count == (1 if status == 200 else 0)
+
+
+def test_clock_tolerance_does_not_extend_expiry(backend):
+    client, state = backend
+    now = int(time.time())
+    assert client.get('/v1/me', headers=headers(iat=now - 121, exp=now - 1)).status_code == 401
+    assert state['calls'] == []
+
+
+@pytest.mark.parametrize(('changes', 'reason'), [
+    ({'iat': int(time.time()) + 300, 'exp': int(time.time()) + 420}, 'ImmatureSignatureError'),
+    ({'iat': int(time.time()) - 300, 'exp': int(time.time()) - 180}, 'ExpiredSignatureError'),
+])
+def test_auth_diagnostics_do_not_log_secrets_or_tokens(backend, caplog, changes, reason):
+    client, state = backend
+    credential = headers(**changes)
+    assert client.get('/v1/me', headers=credential).status_code == 401
+    assert reason in caplog.text
+    assert SECRET not in caplog.text
+    assert credential['Authorization'] not in caplog.text
     assert state['calls'] == []
 
 

@@ -175,6 +175,59 @@ def test_attendance_export_uses_existing_attachment(backend):
     assert len(response.json()['data']['artifacts']) == 1
 
 
+@pytest.mark.parametrize(('action', 'file_format'), [('attendance', 'pdf'), ('attendance_totals', 'xlsx')])
+def test_attendance_file_format_cannot_be_ignored(backend, action, file_format):
+    client, state = backend
+    enable(client, state, [request(action=action, subject='company', employee_name=None,
+        format=file_format, report_type='monthly_details', period_kind='month')])
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'Can you give me last month attendance report in PDF?'})
+    assert response.status_code == 200
+    assert state['last_export_body']['scope'] == 'company'
+    assert state['last_export_body']['format'] == file_format
+    assert state['last_export_body']['month'] == '2026-09'
+    artifact = response.json()['data']['artifacts'][0]
+    assert artifact['format'] == file_format
+    download = client.get('/v1/reports/' + artifact['report_id'] + '/download', headers=headers())
+    assert download.status_code == 200
+    assert download.content.startswith(b'%PDF' if file_format == 'pdf' else b'PK')
+
+
+def test_pdf_followup_retains_employee_and_period(backend):
+    client, state = backend
+    enable(client, state, [request(action='attendance_totals'), request(action='attendance', subject='previous',
+        employee_name=None, start_date=None, end_date=None, format='pdf', use_previous=True)])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Joydeep attendance last month'})
+    second = client.post('/v1/chat', headers=headers(), json={'message': 'Make that a PDF',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert second.status_code == 200
+    assert state['last_export_body']['employee_id'] == 101
+    assert state['last_export_body']['start_date'] == '2026-09-01'
+    assert state['last_export_body']['end_date'] == '2026-09-30'
+    assert len(second.json()['data']['artifacts']) == 1
+
+
+def test_attendance_format_does_not_bypass_export_permission(backend):
+    client, state = backend
+    enable(client, state, [request(action='attendance', subject='self', employee_name=None, format='pdf')])
+    state['export'] = False
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'My attendance in PDF'})
+    assert response.status_code == 403
+    assert 'export' not in state['calls']
+
+
+def test_ordinary_summary_does_not_inherit_export_behavior(backend):
+    client, state = backend
+    enable(client, state, [request(action='export_attendance', subject='self', employee_name=None,
+        format='pdf'), request(action='attendance_totals', subject='previous', employee_name=None,
+        use_previous=True)])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'My attendance PDF'})
+    second = client.post('/v1/chat', headers=headers(), json={'message': 'Show the summary instead',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert second.status_code == 200
+    assert second.json()['data']['artifacts'] == []
+    assert state['calls'].count('export') == 1
+
+
 def test_project_newest_batch_uses_existing_tool(backend):
     client, state = backend
     enable(client, state, [request(action='project_tasks', subject='company', employee_name=None,

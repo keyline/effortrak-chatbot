@@ -42,10 +42,14 @@ def format_monthly_report(data: dict) -> str:
         lines.append('No classified calendar statuses.')
     lines.extend([f"Unclassified employee-days: {data['unclassified_employee_days']}",
                   f"Total worked time: {duration(data['worked_minutes'])}", '', 'Employee breakdown'])
-    # Render the authorized aggregates locally; do not introduce name lookup or new external data.
+    # Names already belong to the authorized attendance rows; no extra lookup is needed.
+    names = {row['employee_id']: ' '.join(row['employee_name'].split())
+             for row in data.get('rows', []) if isinstance(row.get('employee_name'), str)}
     for employee in data['employee_summaries']:
         statuses = '; '.join(f'{status}: {count}' for status, count in sorted(employee['status_counts'].items()))
-        lines.append(f"Employee #{employee['employee_id']}: {statuses or 'No classified statuses'}; "
+        name = names.get(employee['employee_id'])
+        label = f"Employee #{employee['employee_id']}" + (f' ({name})' if name else '')
+        lines.append(f"{label}: {statuses or 'No classified statuses'}; "
                      f"unclassified: {employee['unclassified_days']}; worked: {duration(employee['worked_minutes'])}")
     lines.extend(['', 'Each employee-date has one calendar status. Unclassified days are not absences. '
                   'Worked time is recorded attendance time, not payroll payable time.', data.get('notice', '')])

@@ -77,6 +77,12 @@ subject=previous, action=tasks, latest_limit=10, period_kind=none and null dates
 For next/more batches preserve the person, limit and period; set page to previous page plus one.
 Project names are not client names. Exports are attendance only:
 PDF/XLSX Today, Last 7 Days, Monthly Details, Custom Range (up to 93 inclusive days).
+When an attendance request asks for PDF, Excel, XLSX or a downloadable file, choose
+export_attendance, not attendance or attendance_totals. Set format to pdf or xlsx.
+This also applies to report requests phrased as "give me last month's attendance in PDF"
+and follow-ups such as "make that a PDF". Preserve the selected employee/scope and period.
+For a complete calendar month choose report_type=monthly_details; use custom_range for
+explicit intervals. An ordinary on-screen report request without a file format is not an export.
 locations/missing_location are recorded captures, not live tracking, geofence or GPS accuracy.
 work_arrangements is current permitted WFH/WFO configuration only. Historical daily modes and
 approvals are unsupported. approved_leave is approved requests, not pending approval queues.
@@ -170,6 +176,10 @@ async def semantic_reply(service, message, context, identity):
         if question.project_name:
             selected.pop('project_id', None)
     action = question.action
+    # A supported explicit file format must not silently become an on-screen summary.
+    if action in ('attendance', 'attendance_totals') and question.format is not None:
+        action = 'export_attendance'
+        selected.update(action=action, report_type=question.report_type)
     if action == 'tasks' and question.latest_limit is not None and question.period_kind == 'none' and question.start_date is None and question.end_date is None:
         selected.update(start_date=None, end_date=None)
     if action == 'greeting':
@@ -234,7 +244,7 @@ async def semantic_reply(service, message, context, identity):
             first, last = date.fromisoformat(start), date.fromisoformat(end)
             if not 0 <= (last - first).days <= 92:
                 raise ValueError('range')
-            if action in ('attendance', 'tasks') and question.period_kind == 'month' and first.day == 1 and (first.year, first.month) == (last.year, last.month):
+            if action in ('attendance', 'tasks', 'export_attendance') and question.period_kind == 'month' and first.day == 1 and (first.year, first.month) == (last.year, last.month):
                 last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
                 end = last.isoformat()
                 selected.update(end_date=end)

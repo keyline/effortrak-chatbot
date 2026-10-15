@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 import hmac
+import logging
+import time
 from typing import Literal
 
 import jwt
@@ -35,6 +37,8 @@ DEMO_ACCOUNTS = {
 }
 
 bearer = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
+DELEGATION_CLOCK_SKEW_SECONDS = 120
 
 
 async def authenticate(
@@ -45,17 +49,24 @@ async def authenticate(
     if config.data_mode == 'backend':
         secret = config.ai_service_secret.get_secret_value()
         if not credentials or not hmac.compare_digest(request.headers.get('X-AI-Service-Key', ''), secret):
+            logger.warning('AI delegation rejected: missing credentials or service-key mismatch')
             raise HTTPException(401, 'Backend mode requires authenticated CodeIgniter delegation.')
         token = credentials.credentials
         try:
             claims = jwt.decode(token, secret, algorithms=['HS256'], issuer='effortrak', audience='effortrak-ai',
+                                leeway=DELEGATION_CLOCK_SKEW_SECONDS,
                                 options={'require': ['exp', 'iat', 'iss', 'aud', 'sub', 'jti', 'company_id', 'purpose']})
             if (claims['purpose'] != 'attendance-chat' or not claims['sub'].isdigit()
                     or int(claims['sub']) <= 0 or type(claims['company_id']) is not int or claims['company_id'] <= 0
                     or type(claims['iat']) is not int or type(claims['exp']) is not int
                     or not 0 < claims['exp'] - claims['iat'] <= 120):
                 raise ValueError('Invalid identity claims')
-        except (jwt.PyJWTError, ValueError, TypeError, AttributeError):
+            # Accommodate a slightly fast issuer without extending token expiry.
+            if claims['exp'] <= time.time():
+                raise jwt.ExpiredSignatureError('Expired delegated credential')
+        except (jwt.PyJWTError, ValueError, TypeError, AttributeError) as exc:
+            # Exception classes identify failures without logging credentials or claims.
+            logger.warning('AI delegation JWT rejected: %s', type(exc).__name__)
             raise HTTPException(401, 'Invalid or expired delegated credential.') from None
         return await request.app.state.backend.identity(token, claims['company_id'], int(claims['sub']))
     identity = DEMO_ACCOUNTS.get(credentials.credentials) if credentials else None

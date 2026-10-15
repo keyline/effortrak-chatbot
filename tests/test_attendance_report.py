@@ -26,6 +26,12 @@ def test_monthly_report_explains_employee_days_and_keeps_full_aggregates():
     assert 'Total worked time: 15h 45m' in text
     assert 'Unclassified days are not absences' in text
     assert '2026-10-31' in text
+    data['rows'] = [dict(employee_id=101, employee_name='Test Employee'),
+                    dict(employee_id=102, employee_name='Another\nEmployee <name>')]
+    named = format_monthly_report(data)
+    assert 'Employee #101 (Test Employee): Present: 20' in named
+    assert 'Employee #102 (Another Employee <name>): Late: 9; Present: 13' in named
+    assert 'Another\nEmployee' not in named
 
 
 @pytest.mark.parametrize('message', ['Show company attendance for 2026-10',
