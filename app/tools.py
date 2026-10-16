@@ -10,7 +10,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet
 
 from app.auth import Identity
-from app.schemas import AttendanceArgs, ExportArgs, EmployeeCountArgs, DailyAttendanceArgs, DailyTaskArgs, TaskSummaryArgs
+from app.schemas import AttendanceArgs, ExportArgs, EmployeeCountArgs, DailyAttendanceArgs, DailyTaskArgs, TaskSummaryArgs, WorkReportArgs
 
 
 EMPLOYEES = [
@@ -103,6 +103,7 @@ def export_attendance(identity: Identity, args: ExportArgs) -> tuple[dict, dict]
 def definitions(identity: Identity) -> list[dict]:
     tools = []
     for name, model, description in [
+        ('get_employee_work_report', WorkReportArgs, 'Display an authorized work-hours summary combining punches, attendance, desktop productive/idle time, screenshot capture counts and recorded average activity. Module and assignment checks are enforced by the backend. Normally detailed_review=false: show only brief supported recurring concerns from the preceding 30 completed days. True only for an explicitly requested detailed review. At most 31 requested days; resolve names/IDs using authorized context. Records and screenshot images stay local.'),
         ('get_employee_count', EmployeeCountArgs, 'Count active employees in an authorized scope. Use for total employees, headcount, team size. No date or employee ID needed. Not a present-day attendance count.'),
         ('get_daily_attendance', DailyAttendanceArgs, 'Read attendance for one exact date: today, yesterday, present, absent, late, leave, hours or punch times. Resolve relative dates using the supplied local date. employee_id=null reads the entire scope.'),
         ('get_attendance', AttendanceArgs, 'Read monthly fictional sample attendance for an authorized scope. Real backend results include period, employee_count, employee_summaries, worked time and status totals measured in employee-days, not unique employees. Use full aggregates rather than truncated daily rows.'),
@@ -110,7 +111,9 @@ def definitions(identity: Identity) -> list[dict]:
         ('get_daily_tasks', DailyTaskArgs, 'Read authorized Task Assign details for one date and employee/scope. Resolve this employee and that day from trusted query context; ask for clarification if ambiguous. page=1 first, then explicitly requested next pages. Descriptions remain local; the server presents the details.'),
         ('get_task_summary', TaskSummaryArgs, 'Read monthly authorized Task Assign totals grouped by employee and stored status ID. Planned time is not actual worked time. No task edits or exports.'),
     ]:
-        if name in ('get_attendance', 'get_daily_attendance', 'export_attendance') and 'attendance' not in identity.modules:
+        if name == 'get_employee_work_report' and identity.data_source != 'effortrak_backend':
+            continue
+        if name in ('get_attendance', 'get_daily_attendance', 'export_attendance', 'get_employee_work_report') and 'attendance' not in identity.modules:
             continue
         if name == 'export_attendance' and not identity.can_export:
             continue

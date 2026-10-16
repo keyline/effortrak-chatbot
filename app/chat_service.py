@@ -15,15 +15,20 @@ from app.employee_lookup import named_attendance, named_tasks, model_query_conte
 from app.task_report import AssistantReply, trusted_query
 from app.attendance_report import MONTHLY_OVERVIEW, format_monthly_report, format_daily_report
 from app.config import Settings
-from app.schemas import AttendanceArgs, ExportArgs, EmployeeCountArgs, DailyAttendanceArgs, DailyTaskArgs, TaskSummaryArgs
+from app.schemas import AttendanceArgs, ExportArgs, EmployeeCountArgs, DailyAttendanceArgs, DailyTaskArgs, TaskSummaryArgs, WorkReportArgs
 from app.tools import attendance, definitions, export_attendance
 from app.export_request import export_request
 from app.project_query import project_reply
 from app.manager_query import manager_reply
 from app.semantic_query import semantic_reply
+from app.token_usage import TokenMeter
+from app.work_report import wants_review
 
 
 INSTRUCTIONS = '''You are the Effortrak employee-report assistant.
+For combined work-hours/productivity/idle/activity reports use get_employee_work_report.
+The server displays a concise local report and brief supported recurring concerns. Detailed
+review is opt-in only. Screenshot images remain local; missing tracking is not poor performance.
 Answer employee headcount, attendance and task questions using the supplied tools. Never invent
 attendance, totals, permissions, or report download links. Respect the data source
 and notices supplied by each tool. Do not call blank statuses absences or turn
@@ -95,6 +100,7 @@ class ChatService:
         self.settings = settings
         self.backend = backend
         self.client = None
+        self.token_meter = TokenMeter(settings.database_file, backend) if settings.ai_token_metering_enabled and backend else None
         if settings.chat_mode == 'openai' and settings.openai_api_key.get_secret_value() and settings.openai_model:
             # Trust the OS-managed CA store without disabling certificate or hostname checks.
             tls = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -102,8 +108,15 @@ class ChatService:
                                       http_client=DefaultAsyncHttpxClient(verify=tls))
 
     async def close(self):
+        if self.token_meter:
+            await self.token_meter.close()
         if self.client:
             await self.client.close()
+
+    async def create_response(self, identity: Identity, operation: str, **kwargs):
+        if self.token_meter:
+            return await self.token_meter.create(self.client, identity, operation, **kwargs)
+        return await self.client.responses.create(**kwargs)
 
     def execute(self, name: str, arguments: dict, identity: Identity, reports: list[dict]) -> dict:
         try:
@@ -236,7 +249,7 @@ class ChatService:
         tool_errors = []
         verified_count = None
         for _ in range(5):
-            response = await self.client.responses.create(
+            response = await self.create_response(identity, 'chat',
                 model=self.settings.openai_model,
                 instructions=INSTRUCTIONS + f'\nCurrent Asia/Kolkata date: {datetime.now(timezone(timedelta(hours=5, minutes=30))).date()}. '
                 + f'Authorized scopes: {", ".join(identity.scopes)}. '
@@ -286,6 +299,21 @@ class ChatService:
                     arguments = None
                 if call.name == 'get_employee_count' and re.search(r'\b(?:booking|booked|logged|timesheet)\b', message, re.I):
                     result = {'error': 'This question needs booked-time data, not employee headcount. Please specify the employee and booking period.'}
+                elif call.name == 'get_employee_work_report':
+                    if not isinstance(arguments, dict):
+                        result = {'error': 'Please specify a valid employee and work report period.'}
+                    else:
+                        arguments['detailed_review'] = bool(arguments.get('detailed_review')) and wants_review(message)
+                        explicit = re.search(r'\bemployee\s*(?:id\s*[:#]?\s*|#\s*)(\d+)\b', message, re.I)
+                        known = context.get('employee_ids', [])
+                        if arguments.get('scope') == 'self':
+                            arguments['employee_id'] = None
+                        verified = arguments.get('employee_id') is None or (
+                            explicit and arguments['employee_id'] == int(explicit[1])) or arguments.get('employee_id') in known
+                        if not verified:
+                            result = {'error': 'Please confirm the employee ID for this work report.'}
+                        else:
+                            result = await self.execute_tool(call.name, arguments, identity, reports, local_results)
                 elif call.name in ('get_daily_tasks', 'get_task_summary'):
                     arguments = self.task_arguments(message, arguments, context, identity)
                     if arguments is None:
@@ -319,6 +347,8 @@ class ChatService:
                 items.append({'type': 'function_call_output', 'call_id': call.call_id,
                               'output': json.dumps(result)})
             # Verified attendance needs no second provider request to paraphrase its facts.
+            if self.backend and local_results and tools_used[-1] == 'get_employee_work_report' and not tool_errors:
+                return local_results[-1], tools_used, reports
             if self.backend and not tool_errors and not local_results:
                 if daily_report is not None:
                     return AssistantReply(format_daily_report(daily_report), query_context=context), tools_used, reports
@@ -480,6 +510,11 @@ class ChatService:
         if self.settings.data_mode == 'sample':
             return self.execute(name, arguments, identity, reports)
         try:
+            if name == 'get_employee_work_report':
+                result = await self.backend.work_report(identity, WorkReportArgs.model_validate(arguments))
+                if local_results is not None:
+                    local_results.append(result.local_reply)
+                return result.model_payload
             if name in ('get_daily_tasks', 'get_task_summary'):
                 if 'tasks' not in identity.modules:
                     raise HTTPException(403, 'Task-module read permission is required.')

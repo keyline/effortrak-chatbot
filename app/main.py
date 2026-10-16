@@ -12,6 +12,7 @@ from app.backend_client import BackendClient
 from app.config import Settings
 from app.schemas import ChatData, ChatRequest, ChatResponse
 from app.store import Store
+from app.token_usage import conversation_context
 from app.tools import allowed_employee_ids
 from app.employee_lookup import named_attendance, named_tasks
 from app.task_report import AssistantReply
@@ -26,6 +27,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.store = Store(config.database_file)
         app.state.backend = BackendClient(config) if config.data_mode == 'backend' else None
         app.state.chat = ChatService(config, app.state.backend)
+        if app.state.chat.token_meter:
+            app.state.chat.token_meter.start()
         app.state.chat_lock = asyncio.Lock()
         yield
         await app.state.chat.close()
@@ -58,13 +61,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 'data_source': 'fictional_sample' if config.data_mode == 'sample' else 'effortrak_backend',
                 'production_ready': False}
 
+    async def usage_status(identity):
+        if config.ai_token_metering_enabled and app.state.backend:
+            try:
+                return await app.state.backend.call('token-status', identity.credential)
+            except HTTPException:
+                pass
+        return None
+
     @app.get('/v1/me')
-    def me(identity: Identity = Depends(authenticate)):
+    async def me(identity: Identity = Depends(authenticate)):
         return {'success': True, 'data': {'company_id': identity.company_id,
                 'user_id': identity.user_id, 'name': identity.name,
                 'designation': identity.designation, 'attendance_scopes': identity.scopes,
                 'can_export': identity.can_export, 'data_source': identity.data_source,
-                'modules': identity.modules}}
+                'modules': identity.modules, 'quota': await usage_status(identity)}}
 
     @app.post('/v1/chat', response_model=ChatResponse)
     async def chat(body: ChatRequest, identity: Identity = Depends(authenticate)):
@@ -73,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             store = app.state.store
             conversation_id = str(body.conversation_id) if body.conversation_id else store.create(identity)
             history = store.history(conversation_id, identity)
+            usage_context = conversation_context.set(conversation_id)
             try:
                 reply, tools_used, reports = await app.state.chat.reply(body.message, history, identity)
                 if app.state.backend:
@@ -81,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if app.state.backend and (named_attendance(message) or named_tasks(message) or 'export_attendance' in tools_used
                                           or 'project_search' in tools_used or 'get_project_tasks' in tools_used
                                           or 'get_manager_report' in tools_used or capability_reply(message) or report_kind(message)
+                                          or 'get_employee_work_report' in tools_used
                                           or (getattr(reply, 'query_context', None) or {}).get('source') in ('local_project_search', 'local_manager_report')):
                     message = AssistantReply(message, model_content='An employee report was requested by name and handled locally.')
                 store.save_turn(conversation_id, identity, message, reply, reports)
@@ -88,11 +101,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if body.conversation_id is None:
                     store.delete(conversation_id, identity)
                 raise
+            finally:
+                conversation_context.reset(usage_context)
             artifacts = [{key: report[key] for key in ('report_id', 'filename', 'format', 'download_url')}
                          for report in reports]
             return ChatResponse(data=ChatData(conversation_id=conversation_id, reply=reply,
                                 mode=config.chat_mode, data_source=identity.data_source,
-                                tools_used=tools_used, artifacts=artifacts))
+                                tools_used=tools_used, artifacts=artifacts, quota=await usage_status(identity)))
 
     @app.get('/v1/conversations')
     def conversations(identity: Identity = Depends(authenticate)):

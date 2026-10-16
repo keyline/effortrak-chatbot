@@ -1,5 +1,7 @@
 import base64
+import json
 import re
+from datetime import timedelta
 from uuid import uuid4
 
 import httpx
@@ -11,6 +13,7 @@ from app.config import Settings
 from app.schemas import StrictModel
 from app.task_report import TaskResult, task_result
 from app.employee_lookup import name_tokens
+from app.work_report import WorkData, format_work_report
 
 
 class BackendContext(StrictModel):
@@ -35,22 +38,34 @@ class BackendClient:
 
     async def call(self, endpoint: str, token: str, body: dict | None = None) -> dict:
         url = self.config.backend_url.rstrip('/') + '/apiv2/ai/internal/' + endpoint
+        headers = {'X-AI-Service-Key': self.config.ai_service_secret.get_secret_value()}
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
         try:
-            response = await self.client.post(url, json=body or {}, headers={
-                'Authorization': f'Bearer {token}',
-                'X-AI-Service-Key': self.config.ai_service_secret.get_secret_value(),
-            })
+            response = await self.client.post(url, json=body or {}, headers=headers)
         except httpx.HTTPError:
             raise HTTPException(502, 'Effortrak backend is unavailable or timed out.') from None
         if response.status_code >= 400:
             status = response.status_code if response.status_code in (401,403,404,409,413,422,429,503) else 502
             # Forward only audited messages; arbitrary backend details remain private.
+            if status == 429 and endpoint == 'token-reserve':
+                raise HTTPException(429, 'Company AI token allowance is insufficient for this request. Contact your administrator.')
+            if endpoint == 'work-report' and status in (413, 422):
+                try:
+                    message = response.json().get('message')
+                except (ValueError, AttributeError):
+                    message = None
+                if message in ('Work reports support up to 31 days.', 'Future work records are unavailable.',
+                               'Select an employee or a team of at most 10 employees for work reports.'):
+                    raise HTTPException(status, message)
             if status == 403:
                 try:
                     message = response.json().get('message')
                 except (ValueError, AttributeError):
                     message = None
                 safe_messages = {
+                    'Daily report permission is required for work reports.':
+                        'Your role needs Daily Report permission to view employee work summaries.',
                     'Effort report permission is required.':
                         'Your role needs Effort Report permission to view timesheet booking totals.',
                     'Attendance location permission is required.':
@@ -66,6 +81,8 @@ class BackendClient:
                         'You do not have permission to export reports. You can still ask to view authorized attendance.',
                     'You do not have permission to use the AI assistant.':
                         'Your role does not have permission to use the AI assistant.',
+                    'AI assistant is disabled for your company.':
+                        'AI assistant is disabled for your company.',
                     'No licensed AI-readable modules are available.':
                         'No licensed AI-readable modules are available for your account.',
                     'Module is not licensed.':
@@ -117,6 +134,43 @@ class BackendClient:
         current = await self.identity(identity.credential, identity.company_id, identity.user_id)
         if current.policy_key != identity.policy_key:
             raise HTTPException(409, 'Permissions changed. Start a new conversation.')
+
+    async def work_report(self, identity: Identity, args):
+        await self.revalidate(identity)
+        if args.scope not in identity.scopes or 'attendance' not in identity.modules:
+            raise HTTPException(403, 'Work report is outside your authorized scope.')
+        data = await self.call('work-report', identity.credential, args.model_dump(mode='json'))
+        try:
+            parsed = WorkData.model_validate_json(json.dumps(data), strict=True)
+            ids = parsed.employee_ids
+            if (parsed.data_source != 'effortrak_backend' or parsed.scope != args.scope
+                    or len(set(ids)) != len(ids) or any(type(value) is not int or value <= 0 for value in ids)
+                    or [row.employee_id for row in parsed.rows] != ids
+                    or args.scope == 'self' and any(value != identity.user_id for value in ids)
+                    or args.employee_id is not None and any(value != args.employee_id for value in ids)
+                    or parsed.detailed_review != args.detailed_review
+                    or parsed.period.start != args.start_date or parsed.period.end > args.end_date
+                    or parsed.period.end > parsed.period.as_of or parsed.period.end < parsed.period.start
+                    or (parsed.review_period.end - parsed.review_period.start).days != 29
+                    or parsed.review_period.end != min(parsed.period.end, parsed.period.as_of - timedelta(days=1))):
+                raise ValueError('Invalid work report identity or period')
+            for row in parsed.rows:
+                if row.summary.days != (parsed.period.end - parsed.period.start).days + 1:
+                    raise ValueError('Invalid work summary day count')
+                if (row.review is not None) != args.detailed_review or any(len(note) > 350 for note in row.attention):
+                    raise ValueError('Unrequested review')
+                totals = [row.summary] + ([row.review.summary] if row.review is not None else [])
+                if not row.tracking_available and any(any(getattr(summary, field) is not None for field in ('productive_seconds', 'idle_seconds', 'tracked_seconds', 'average_activity', 'screenshot_count')) for summary in totals):
+                    raise ValueError('Unauthorized tracking data')
+                if row.review is not None:
+                    days = [day.date for day in row.review.days]
+                    if len(days) != 30 or row.review.summary.days != len(days) or len(set(days)) != len(days) or any(not parsed.review_period.start <= day <= parsed.review_period.end for day in days):
+                        raise ValueError('Invalid review days')
+                    if not row.tracking_available and any(any(getattr(day, field) is not None for field in ('productive_seconds', 'idle_seconds', 'tracked_seconds', 'activity', 'screenshot_count')) for day in row.review.days):
+                        raise ValueError('Unauthorized review tracking')
+        except (ValidationError, ValueError, TypeError):
+            raise HTTPException(502, 'Invalid backend work report.') from None
+        return format_work_report(parsed)
 
     async def find_employee(self, identity: Identity, scope: str, name: str, module: str = 'attendance') -> dict:
         await self.revalidate(identity)

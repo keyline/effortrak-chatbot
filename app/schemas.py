@@ -60,6 +60,19 @@ class DailyAttendanceArgs(EmployeeCountArgs):
     employee_id: int | None = Field(default=None, ge=1)
 
 
+class WorkReportArgs(EmployeeCountArgs):
+    employee_id: int | None = Field(default=None, ge=1)
+    start_date: date
+    end_date: date
+    detailed_review: bool = False
+
+    @model_validator(mode='after')
+    def bounded_period(self):
+        if not 0 <= (self.end_date - self.start_date).days <= 30:
+            raise ValueError('Work reports support up to 31 inclusive days.')
+        return self
+
+
 class TaskSummaryArgs(AttendanceArgs):
     pass
 
@@ -119,6 +132,7 @@ class Artifact(StrictModel):
 
 
 class ChatData(StrictModel):
+    quota: dict | None = None
     conversation_id: UUID
     reply: str
     mode: Literal['demo', 'openai']

@@ -10,7 +10,8 @@ from fastapi import HTTPException
 from pydantic import Field, ValidationError
 
 from app.schemas import (StrictModel, ManagerReportArgs, DailyAttendanceArgs, AttendanceArgs,
-                         DailyTaskArgs, TaskSummaryArgs, EmployeeTaskHistoryArgs, ProjectTaskArgs, EmployeeCountArgs, ExportArgs)
+                         DailyTaskArgs, TaskSummaryArgs, EmployeeTaskHistoryArgs, ProjectTaskArgs, EmployeeCountArgs, ExportArgs, WorkReportArgs)
+from app.work_report import wants_review
 from app.manager_query import render_report, TITLES
 from app.attendance_report import format_daily_report, format_monthly_report
 from app.task_report import AssistantReply
@@ -21,7 +22,7 @@ class Question(StrictModel):
                     'late', 'late_punchin', 'missing_punchout', 'present', 'absent', 'work_arrangements',
                     'locations', 'missing_location', 'effort_by_employee', 'effort_by_project',
                     'task_overruns', 'workload', 'approved_leave', 'attendance_totals', 'booked_time',
-                    'greeting', 'unsupported', 'clarify']
+                    'work_summary', 'work_review', 'greeting', 'unsupported', 'clarify']
     subject: Literal['self', 'team', 'company', 'employee', 'previous', 'unspecified']
     employee_name: str | None
     project_name: str | None
@@ -38,6 +39,14 @@ class Question(StrictModel):
 
 
 INSTRUCTIONS = '''Interpret the user's question, never answer it or invent records. Call interpret_question once.
+Work-hour summaries combining punches, productive time, idle time, screenshot coverage and average
+activity use work_summary. The backend checks preceding completed days for brief recurring concerns
+automatically; do not choose a detailed analysis just because an employee is named or concerns are asked.
+Use work_review only for explicitly requested detailed/30-day/monthly work-pattern analysis.
+For a work summary without dates use today's date. A detailed work review without dates uses
+the previous 30 completed calendar days (yesterday and 29 prior days). Work reports support at most
+31 days, authorized screenshot metadata only, no image interpretation or work-quality verdicts.
+Ordinary attendance-only questions keep attendance; booked effort remains booked_time.
 Choose answer_style=summary for aggregate how-many/count/total questions; do not list employee
 names unless requested. Choose names for who/which employees/show names/list those employees.
 Name-list follow-ups reuse the same action, date and subject with use_previous=true. Choose
@@ -141,7 +150,7 @@ async def interpret(service, message, context, identity):
     safe.update(has_employee=bool(previous.get('employee_id') or previous.get('employee_name')),
                 has_project=bool(previous.get('project_id') or previous.get('project_name')))
     schema = Question.model_json_schema()
-    result = await service.client.responses.create(
+    result = await service.create_response(identity, 'semantic_query',
         model=service.settings.openai_model, store=False, parallel_tool_calls=False,
         max_output_tokens=1000, tool_choice={'type': 'function', 'name': 'interpret_question'},
         tools=[{'type': 'function', 'name': 'interpret_question', 'description': 'Extract a supported report request, not an answer.',
@@ -225,6 +234,13 @@ async def semantic_reply(service, message, context, identity):
         selected.pop('employee_id', None)
     common = {'scope': scope, 'employee_id': selected.get('employee_id')}
     start, end = selected.get('start_date'), selected.get('end_date')
+    if action in ('work_summary', 'work_review'):
+        detailed = action == 'work_review' and wants_review(message)
+        if not start and not end:
+            today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+            last = today - timedelta(days=1) if detailed else today
+            start, end = str(last - timedelta(days=29) if detailed else last), str(last)
+            selected.update(start_date=start, end_date=end)
     if action not in ('project_tasks', 'booked_time'):
         selected.pop('project_id', None)
         selected['project_name'] = None
@@ -248,6 +264,12 @@ async def semantic_reply(service, message, context, identity):
                 last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
                 end = last.isoformat()
                 selected.update(end_date=end)
+        if action in ('work_summary', 'work_review'):
+            if selected.get('format') is not None:
+                return reply('Work reports are available on screen; PDF/XLSX export is currently attendance-only.', selected, used)
+            args = WorkReportArgs(**common, start_date=start, end_date=end, detailed_review=detailed)
+            result = await service.backend.work_report(identity, args)
+            return reply(str(result.local_reply), selected, used + ['get_employee_work_report'])
         if action in TITLES:
             if action == 'booked_time' and selected.get('project_name') and not selected.get('project_id'):
                 found = await service.backend.find_project(identity, scope, selected['project_name'], booked_effort=True)
@@ -306,4 +328,6 @@ async def semantic_reply(service, message, context, identity):
         return reply(format_daily_report(data) if daily else format_monthly_report(data), selected,
                      used + ['get_daily_attendance' if daily else 'get_attendance'])
     except (ValidationError, ValueError, TypeError):
+        if action in ('work_summary', 'work_review'):
+            return reply('Please select a valid work-report period of up to 31 days.', selected, used)
         return reply('Please provide a valid period of up to 93 days and valid report options.', selected, used)

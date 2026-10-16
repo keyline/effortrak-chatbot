@@ -39,6 +39,8 @@ def backend(tmp_path):
         state['calls'].append(endpoint)
         if state['revoked']:
             return httpx.Response(401, json={'success': False})
+        if state.get('company_disabled'):
+            return httpx.Response(403, json={'success': False, 'message': 'AI assistant is disabled for your company.'})
         if endpoint == 'context':
             data = dict(company_id=state.get('context_company', company), user_id=user,
                         name='Real test employee', designation='Employee', scopes=state.get('scopes', ['self']),
@@ -404,6 +406,23 @@ def test_common_question_tools_return_authorized_facts(backend, name, arguments,
         assert all(row['date'] == '2026-10-06' for row in result['rows'])
     assert 'Authorized scopes: self' in create.call_args.kwargs['instructions']
     assert SECRET not in str(create.call_args_list)
+
+
+def test_company_disable_denies_me_and_chat_before_model_call(backend):
+    client, state = backend
+    assert client.get('/v1/me', headers=headers()).status_code == 200
+    service = client.app.state.chat
+    service.settings.chat_mode = 'openai'
+    create = AsyncMock(side_effect=AssertionError('Disabled companies must not call the model.'))
+    service.client = SimpleNamespace(responses=SimpleNamespace(create=create), close=AsyncMock())
+    state['company_disabled'] = True
+    for response in [client.get('/v1/me', headers=headers()),
+                     client.post('/v1/chat', headers=headers(), json={'message': 'Show my attendance'})]:
+        assert response.status_code == 403
+        assert response.json()['message'] == 'AI assistant is disabled for your company.'
+    create.assert_not_awaited()
+    state['company_disabled'] = False
+    assert client.get('/v1/me', headers=headers()).status_code == 200
 
 
 def test_employee_count_tool_cannot_expand_scope(backend):
