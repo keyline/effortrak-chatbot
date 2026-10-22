@@ -25,11 +25,16 @@ def payload(args):
         review = dict(summary=totals(30), days=[dict(date=str(review_start + timedelta(days=i)), punch_in='09:35:00', punch_out='18:00:00',
             attendance_minutes=505, productive_seconds=18000, idle_seconds=3600, tracked_seconds=21600, screenshot_count=60,
             activity=75.0, eligible=True, late=False, missing_punchout=False, short_day=False) for i in range(30)])
-    return dict(data_source='effortrak_backend', scope=args['scope'], employee_ids=[101],
+    result = dict(data_source='effortrak_backend', scope=args['scope'], employee_ids=[101],
         period=dict(start=str(start), end=str(end), as_of=str(as_of)),
         review_period=dict(start=str(review_start), end=str(review_end)), detailed_review=args['detailed_review'],
         rows=[dict(employee_id=101, employee_name='Private Employee', tracking_available=True,
                    summary=totals((end - start).days + 1), attention=[], review=review)])
+    if args.get('include_daily'):
+        result['rows'][0]['daily'] = [dict(date=str(start + timedelta(days=i)), punch_in='09:35:00', punch_out='18:00:00',
+            attendance_minutes=505, productive_seconds=18000, idle_seconds=3600, tracked_seconds=21600, screenshot_count=60,
+            activity=75.0, eligible=True, late=False, missing_punchout=False, short_day=False) for i in range((end - start).days + 1)]
+    return result
 
 
 def wire(client, state, questions, change=None):

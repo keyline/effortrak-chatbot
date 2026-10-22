@@ -5,10 +5,11 @@ from app.attendance_report import duration
 
 
 class AssistantReply(str):
-    def __new__(cls, content: str, *, model_content: str | None = None, query_context: dict | None = None):
+    def __new__(cls, content: str, *, model_content: str | None = None, query_context: dict | None = None, charts=None):
         reply = super().__new__(cls, content)
         reply.model_content = content if model_content is None else model_content
         reply.query_context = query_context
+        reply.charts = charts or []
         return reply
 
 
@@ -17,6 +18,7 @@ class TaskResult:
     # Only model_payload may be serialized into an OpenAI function-call output.
     model_payload: dict
     local_reply: AssistantReply
+    chart_source: object = None
 
 
 def trusted_query(history: list[dict]) -> dict:

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone, date
 from typing import Literal
 
 from fastapi import HTTPException
-from pydantic import Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 
 from app.schemas import (StrictModel, ManagerReportArgs, DailyAttendanceArgs, AttendanceArgs,
                          DailyTaskArgs, TaskSummaryArgs, EmployeeTaskHistoryArgs, ProjectTaskArgs, EmployeeCountArgs, ExportArgs, WorkReportArgs)
@@ -15,9 +15,19 @@ from app.work_report import wants_review
 from app.manager_query import render_report, TITLES
 from app.attendance_report import format_daily_report, format_monthly_report
 from app.task_report import AssistantReply
+from app.report_charts import CHART_REQUEST, TYPE_ONLY, build_report_chart, chart_reply
+
+
+def question_schema(schema):
+    schema['required'] = list(schema['properties'])
+    for field in schema['properties'].values():
+        field.pop('default', None)
 
 
 class Question(StrictModel):
+    model_config = ConfigDict(extra='forbid', json_schema_extra=question_schema)
+    chart_type: Literal['auto', 'pie', 'doughnut', 'bar', 'line', 'table'] | None = None
+    chart_metric: Literal['attendance_breakdown', 'attendance_trend', 'working_hours', 'productivity', 'activity'] | None = None
     action: Literal['attendance', 'tasks', 'project_tasks', 'employee_count', 'export_attendance',
                     'late', 'late_punchin', 'missing_punchout', 'present', 'absent', 'work_arrangements',
                     'locations', 'missing_location', 'effort_by_employee', 'effort_by_project',
@@ -39,11 +49,23 @@ class Question(StrictModel):
 
 
 INSTRUCTIONS = '''Interpret the user's question, never answer it or invent records. Call interpret_question once.
+Chart/graph/visual requests use chart_type and chart_metric. Ordinary text questions set both null.
+Recognize pie/pi/circle chart, donut/doughnut, bar/column chart, line graph and spelling variants.
+Use auto if visualization requested without a type. Attendance distribution/breakdown is
+attendance_breakdown; attendance over time is attendance_trend. Both use action=attendance.
+Working-hour comparisons or trends use working_hours; productive versus idle uses productivity;
+average activity trends use activity. These three use action=work_summary, NOT tasks or booked_time.
+Chart periods support up to 31 days. These charts do not export to PDF/XLSX.
+Task charts and previous-period side-by-side comparisons are unsupported in this release;
+never substitute attendance for those requests. Ask for missing scope/date rather than inventing.
+For chart follow-ups (same report last month, only my team) use_previous=true; retain the chart
+metric/type unless explicitly changed. "Show numbers in a table" sets chart_type=table.
 Work-hour summaries combining punches, productive time, idle time, screenshot coverage and average
 activity use work_summary. The backend checks preceding completed days for brief recurring concerns
 automatically; do not choose a detailed analysis just because an employee is named or concerns are asked.
 Use work_review only for explicitly requested detailed/30-day/monthly work-pattern analysis.
-For a work summary without dates use today's date. A detailed work review without dates uses
+For a chart without dates leave both dates null so the user can clarify. For a non-chart
+work summary without dates use today's date. A detailed work review without dates uses
 the previous 30 completed calendar days (yesterday and 29 prior days). Work reports support at most
 31 days, authorized screenshot metadata only, no image interpretation or work-quality verdicts.
 Ordinary attendance-only questions keep attendance; booked effort remains booked_time.
@@ -171,7 +193,7 @@ async def semantic_reply(service, message, context, identity):
     question, previous = await interpret(service, message, context, identity)
     selected = question.model_dump()
     if question.use_previous:
-        for key in ('employee_name', 'project_name', 'start_date', 'end_date', 'latest_limit', 'format', 'report_type', 'threshold'):
+        for key in ('employee_name', 'project_name', 'start_date', 'end_date', 'latest_limit', 'format', 'report_type', 'threshold', 'chart_type', 'chart_metric'):
             if selected[key] is None:
                 selected[key] = previous.get(key)
         if question.subject == 'previous':
@@ -184,7 +206,16 @@ async def semantic_reply(service, message, context, identity):
             selected['subject'] = 'employee'
         if question.project_name:
             selected.pop('project_id', None)
+        if previous.get('chart_type') and question.subject in ('self', 'team', 'company') and not question.employee_name:
+            selected['employee_name'] = None
+            selected.pop('employee_id', None)
+            selected.pop('scope', None)
     action = question.action
+    chart_requested = CHART_REQUEST.search(message) or TYPE_ONLY.fullmatch(message) or re.search(r'\btable\b', message, re.I)
+    if not chart_requested and not (question.use_previous and previous.get('chart_type')):
+        selected.update(chart_type=None, chart_metric=None)
+    if selected.get('chart_metric'):
+        selected['chart_type'] = selected.get('chart_type') or 'auto'
     # A supported explicit file format must not silently become an on-screen summary.
     if action in ('attendance', 'attendance_totals') and question.format is not None:
         action = 'export_attendance'
@@ -234,6 +265,8 @@ async def semantic_reply(service, message, context, identity):
         selected.pop('employee_id', None)
     common = {'scope': scope, 'employee_id': selected.get('employee_id')}
     start, end = selected.get('start_date'), selected.get('end_date')
+    if selected.get('chart_type') and not (start and end):
+        return reply('Which date or period should I use for the chart?', selected, used)
     if action in ('work_summary', 'work_review'):
         detailed = action == 'work_review' and wants_review(message)
         if not start and not end:
@@ -264,6 +297,17 @@ async def semantic_reply(service, message, context, identity):
                 last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
                 end = last.isoformat()
                 selected.update(end_date=end)
+        if selected.get('chart_type'):
+            if action not in ('attendance', 'attendance_totals', 'work_summary', 'work_review'):
+                return reply('Charts currently support attendance, working hours, productive versus idle time, and average activity. Task/project charts are not supported yet.', selected, used)
+            if selected.get('format') is not None:
+                return reply('Charts are available on screen. Chart PDF/XLSX export is not supported yet.', selected, used)
+            if not selected.get('chart_metric'):
+                selected['chart_metric'] = 'attendance_breakdown' if action in ('attendance', 'attendance_totals') else 'working_hours' if action in ('work_summary', 'work_review') else None
+            text, charts, chart_tools = await build_report_chart(service, identity, selected)
+            if charts:
+                selected['chart_type'] = charts[0]['type']
+            return chart_reply(text, selected, charts), used + chart_tools, []
         if action in ('work_summary', 'work_review'):
             if selected.get('format') is not None:
                 return reply('Work reports are available on screen; PDF/XLSX export is currently attendance-only.', selected, used)

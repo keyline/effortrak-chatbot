@@ -23,6 +23,7 @@ from app.manager_query import manager_reply
 from app.semantic_query import semantic_reply
 from app.token_usage import TokenMeter
 from app.work_report import wants_review
+from app.report_charts import CHART_REQUEST, restyle, chart_reply
 
 
 INSTRUCTIONS = '''You are the Effortrak employee-report assistant.
@@ -144,7 +145,16 @@ class ChatService:
 
     async def reply(self, message: str, history: list[dict], identity: Identity) -> tuple[str, list[str], list[dict]]:
         context = trusted_query(history)
-        if self.backend and self.settings.chat_mode == 'openai' and self.settings.semantic_questions:
+        if self.backend and history and history[-1]['role'] == 'assistant':
+            previous_charts = json.loads(history[-1].get('charts') or '[]')
+            changed = restyle(message, previous_charts)
+            if changed:
+                text, charts = changed
+                selected = dict(context.get('selection', {}))
+                if charts:
+                    selected['chart_type'] = charts[0]['type']
+                return chart_reply(text, selected, charts), [], []
+        if self.backend and self.settings.chat_mode == 'openai' and (self.settings.semantic_questions or CHART_REQUEST.search(message) or context.get('selection', {}).get('chart_type')):
             if self.client is None:
                 raise HTTPException(503, 'OpenAI question interpretation is not configured.')
             try:

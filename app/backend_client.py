@@ -155,6 +155,15 @@ class BackendClient:
                     or parsed.review_period.end != min(parsed.period.end, parsed.period.as_of - timedelta(days=1))):
                 raise ValueError('Invalid work report identity or period')
             for row in parsed.rows:
+                dates = [day.date for day in row.daily]
+                if ((not args.include_daily and dates) or args.include_daily and
+                        (len(dates) != (parsed.period.end - parsed.period.start).days + 1
+                         or len(set(dates)) != len(dates)
+                         or any(not parsed.period.start <= day <= parsed.period.end for day in dates))):
+                    raise ValueError('Invalid requested daily chart data')
+                if not row.tracking_available and any(any(getattr(day, field) is not None for field in
+                        ('productive_seconds', 'idle_seconds', 'tracked_seconds', 'activity', 'screenshot_count')) for day in row.daily):
+                    raise ValueError('Unauthorized daily tracking')
                 if row.summary.days != (parsed.period.end - parsed.period.start).days + 1:
                     raise ValueError('Invalid work summary day count')
                 if (row.review is not None) != args.detailed_review or any(len(note) > 350 for note in row.attention):

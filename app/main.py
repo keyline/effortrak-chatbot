@@ -106,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             artifacts = [{key: report[key] for key in ('report_id', 'filename', 'format', 'download_url')}
                          for report in reports]
             return ChatResponse(data=ChatData(conversation_id=conversation_id, reply=reply,
+                                charts=getattr(reply, 'charts', []),
                                 mode=config.chat_mode, data_source=identity.data_source,
                                 tools_used=tools_used, artifacts=artifacts, quota=await usage_status(identity)))
 
@@ -116,7 +117,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get('/v1/conversations/{conversation_id}')
     def history(conversation_id: UUID, identity: Identity = Depends(authenticate)):
         return {'success': True, 'data': {'conversation_id': str(conversation_id),
-                'messages': [{key: row[key] for key in ('role', 'content', 'created_at')}
+                'messages': [{**{key: row[key] for key in ('role', 'content', 'created_at')}, 'charts': json.loads(row.get('charts') or '[]')}
                              for row in app.state.store.history(str(conversation_id), identity)],
                 'artifacts': app.state.store.artifacts(str(conversation_id), identity)}}
 

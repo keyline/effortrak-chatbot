@@ -33,7 +33,7 @@ class Store:
                 );
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(messages)')}
-            for column in ('model_content', 'query_context'):
+            for column in ('model_content', 'query_context', 'charts'):
                 if column not in columns:
                     db.execute(f'ALTER TABLE messages ADD COLUMN {column} TEXT')
 
@@ -66,7 +66,7 @@ class Store:
         self.assert_owner(conversation_id, identity)
         with self.connect() as db:
             rows = db.execute(
-                'SELECT role,content,created_at,model_content,query_context FROM messages WHERE conversation_id=? ORDER BY id',
+                'SELECT role,content,created_at,model_content,query_context,charts FROM messages WHERE conversation_id=? ORDER BY id',
                 (conversation_id,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -95,10 +95,10 @@ class Store:
         now = datetime.now(timezone.utc).isoformat()
         with self.connect() as db:
             context = getattr(reply, 'query_context', None)
-            db.executemany('INSERT INTO messages(conversation_id,role,content,created_at,model_content,query_context) VALUES (?,?,?,?,?,?)',
-                           [(conversation_id, 'user', str(message), now, getattr(message, 'model_content', str(message)), None),
+            db.executemany('INSERT INTO messages(conversation_id,role,content,created_at,model_content,query_context,charts) VALUES (?,?,?,?,?,?,?)',
+                           [(conversation_id, 'user', str(message), now, getattr(message, 'model_content', str(message)), None, None),
                             (conversation_id, 'assistant', str(reply), now, getattr(reply, 'model_content', str(reply)),
-                             json.dumps(context) if context is not None else None)])
+                             json.dumps(context) if context is not None else None, json.dumps(getattr(reply, 'charts', [])))])
             for report in reports:
                 db.execute('INSERT INTO reports VALUES (?,?,?,?,?,?)', (
                     report['report_id'], conversation_id, report['filename'], report['format'],

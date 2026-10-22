@@ -73,6 +73,7 @@ class WorkEmployee(StrictModel):
     summary: WorkTotals
     attention: list[str] = Field(max_length=2)
     review: WorkReview | None
+    daily: list[WorkDay] = Field(default_factory=list, max_length=31)
 
 
 class WorkPeriod(StrictModel):
@@ -134,4 +135,4 @@ def format_work_report(data: WorkData) -> TaskResult:
     context = {'module': 'attendance', 'report': 'work_summary', 'scope': data.scope, 'employee_ids': data.employee_ids,
                'start_date': str(period.start), 'end_date': str(period.end), 'work_report': True}
     return TaskResult({'handled_locally': True, 'report': 'work_summary'},
-                      AssistantReply('\n'.join(lines), model_content='An authorized employee work report was displayed locally; records and screenshots were not sent to the model.', query_context=context))
+                      AssistantReply('\n'.join(lines), model_content='An authorized employee work report was displayed locally; records and screenshots were not sent to the model.', query_context=context), chart_source=data)
