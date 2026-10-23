@@ -7,7 +7,8 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException
 
-from app.schemas import AttendanceArgs, DailyAttendanceArgs, WorkReportArgs, ReportChart
+from app.schemas import AttendanceArgs, DailyAttendanceArgs, WorkReportArgs, ReportChart, ManagerReportArgs
+from app.manager_query import render_report
 from app.task_report import AssistantReply
 
 
@@ -46,6 +47,37 @@ async def build_report_chart(service, identity, selected):
     scope = selected['scope']
     common = {'scope': scope, 'employee_id': selected.get('employee_id')}
     period = f'{start} to {end}' if start != end else str(start)
+    if metric == 'booked_effort':
+        data = await service.backend.manager_report(identity, ManagerReportArgs(
+            **common, report='booked_time', start_date=start, end_date=end,
+            project_id=selected.get('project_id')))
+        text = render_report(data)
+        used = ['get_manager_report']
+        rows = data['rows']
+        if not rows:
+            return text, [], used
+        if data['details_truncated'] or data['matched_count'] != len(rows):
+            return text + '\nPlease narrow the employee scope; the effort chart requires a complete report.', [], used
+        if any(row['unavailable_count'] for row in rows):
+            return text + '\nA complete effort chart is unavailable because some timesheet durations are missing.', [], used
+        buckets = [('billable', 'Billable'), ('non_billable', 'Non-billable'), ('unclassified', 'Unclassified billing')]
+        buckets = [(key, label) for key, label in buckets
+                   if key != 'unclassified' or any(row['billing'][key]['entry_count'] for row in rows)]
+        labels = [label for _, label in buckets]
+        values = [round(sum(row['billing'][key]['minutes'] for row in rows) / 60, 4) for key, _ in buckets]
+        subject = rows[0]['employee_name'] if len(rows) == 1 else scope.capitalize()
+        if data.get('project_name'):
+            subject += ' / ' + data['project_name']
+        total = sum(row['booked_minutes'] for row in rows)
+        subtitle = f'Total booked: {total // 60}h {total % 60}m | {sum(row["entry_count"] for row in rows)} timesheet entries'
+        note = 'Recorded timesheet bookings by booking date, not attendance or planned task time. Billing categories are parts of total booked effort; the total is not an additional slice.'
+        if kind == 'line':
+            kind = 'bar'
+            note += ' A bar chart is used because this report contains billing categories, not a daily time series.'
+        chart = make_chart('doughnut' if kind == 'auto' else kind,
+                           f'{subject[:180]} booked effort - {period}', 'hours', labels,
+                           [{'name': 'Booked effort', 'values': values}], note, subtitle)
+        return text, [chart], used
     if metric in ('attendance_breakdown', 'attendance_trend'):
         totals = Counter()
         points = []
@@ -121,7 +153,7 @@ async def build_report_chart(service, identity, selected):
                            'Each employee on each date counts once. For example, 10 employees absent for 2 days = 20 absent employee-days. Unclassified days are not absences.', subtitle)
         return chart['title'] + '\n' + subtitle, [chart], used
     if metric not in ('working_hours', 'productivity', 'activity'):
-        return 'Charts currently support attendance, working hours, productive versus idle time, and average activity. Which would you like?', [], []
+        return 'Charts currently support attendance, working hours, productive versus idle time, average activity, and booked-effort billing breakdowns. Which would you like?', [], []
     result = await service.backend.work_report(identity, WorkReportArgs(**common, start_date=start, end_date=end, include_daily=True))
     data = result.chart_source
     if data is None:

@@ -24,6 +24,7 @@ from app.semantic_query import semantic_reply
 from app.token_usage import TokenMeter
 from app.work_report import wants_review
 from app.report_charts import CHART_REQUEST, restyle, chart_reply
+from app.website_help import website_help
 
 
 INSTRUCTIONS = '''You are the Effortrak employee-report assistant.
@@ -143,8 +144,12 @@ class ChatService:
             return {'error': 'Invalid tool arguments. Use an authorized scope and a YYYY-MM month.'}
         return {'error': 'Unknown tool. Only attendance tools are available.'}
 
-    async def reply(self, message: str, history: list[dict], identity: Identity) -> tuple[str, list[str], list[dict]]:
+    async def reply(self, message: str, history: list[dict], identity: Identity, *, client_platform='web') -> tuple[str, list[str], list[dict]]:
         context = trusted_query(history)
+        if self.backend:
+            help_result = await website_help(message, context, identity, self.backend, client_platform)
+            if help_result is not None:
+                return help_result
         if self.backend and history and history[-1]['role'] == 'assistant':
             previous_charts = json.loads(history[-1].get('charts') or '[]')
             changed = restyle(message, previous_charts)

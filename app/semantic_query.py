@@ -27,7 +27,7 @@ def question_schema(schema):
 class Question(StrictModel):
     model_config = ConfigDict(extra='forbid', json_schema_extra=question_schema)
     chart_type: Literal['auto', 'pie', 'doughnut', 'bar', 'line', 'table'] | None = None
-    chart_metric: Literal['attendance_breakdown', 'attendance_trend', 'working_hours', 'productivity', 'activity'] | None = None
+    chart_metric: Literal['attendance_breakdown', 'attendance_trend', 'working_hours', 'productivity', 'activity', 'booked_effort'] | None = None
     action: Literal['attendance', 'tasks', 'project_tasks', 'employee_count', 'export_attendance',
                     'late', 'late_punchin', 'missing_punchout', 'present', 'absent', 'work_arrangements',
                     'locations', 'missing_location', 'effort_by_employee', 'effort_by_project',
@@ -55,6 +55,11 @@ Use auto if visualization requested without a type. Attendance distribution/brea
 attendance_breakdown; attendance over time is attendance_trend. Both use action=attendance.
 Working-hour comparisons or trends use working_hours; productive versus idle uses productivity;
 average activity trends use activity. These three use action=work_summary, NOT tasks or booked_time.
+Booked/logged effort charts use action=booked_time and chart_metric=booked_effort.
+Pie/doughnut charts show billable versus non-billable hours, including unclassified billing
+when present. Bar/table charts use the same billing breakdown, not daily or planned hours.
+For "convert it into a pie chart" after a booked-effort report retain booked_time, the
+selected employee/project and period. Never substitute attendance or work_summary.
 Chart periods support up to 31 days. These charts do not export to PDF/XLSX.
 Task charts and previous-period side-by-side comparisons are unsupported in this release;
 never substitute attendance for those requests. Ask for missing scope/date rather than inventing.
@@ -211,6 +216,15 @@ async def semantic_reply(service, message, context, identity):
             selected.pop('employee_id', None)
             selected.pop('scope', None)
     action = question.action
+    if TYPE_ONLY.fullmatch(message) and previous.get('action') == 'booked_time':
+        action = 'booked_time'
+        kind = TYPE_ONLY.fullmatch(message)[1].lower()
+        selected.update(action=action, subject=previous.get('subject', 'unspecified'),
+                        chart_metric='booked_effort',
+                        chart_type={'pi': 'pie', 'circle': 'pie', 'donut': 'doughnut'}.get(kind, kind))
+        for key in ('employee_name', 'project_name', 'employee_id', 'project_id', 'scope', 'start_date', 'end_date'):
+            if key in previous:
+                selected[key] = previous[key]
     chart_requested = CHART_REQUEST.search(message) or TYPE_ONLY.fullmatch(message) or re.search(r'\btable\b', message, re.I)
     if not chart_requested and not (question.use_previous and previous.get('chart_type')):
         selected.update(chart_type=None, chart_metric=None)
@@ -297,11 +311,21 @@ async def semantic_reply(service, message, context, identity):
                 last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
                 end = last.isoformat()
                 selected.update(end_date=end)
+        if action == 'booked_time' and selected.get('project_name') and not selected.get('project_id'):
+            found = await service.backend.find_project(identity, scope, selected['project_name'], booked_effort=True)
+            used.append('project_search')
+            if found['has_more'] or len(found['matches']) != 1:
+                return project_clarification(found, selected, used)
+            selected['project_id'] = found['matches'][0]['project_id']
         if selected.get('chart_type'):
-            if action not in ('attendance', 'attendance_totals', 'work_summary', 'work_review'):
-                return reply('Charts currently support attendance, working hours, productive versus idle time, and average activity. Task/project charts are not supported yet.', selected, used)
+            if action not in ('attendance', 'attendance_totals', 'work_summary', 'work_review', 'booked_time'):
+                return reply('Charts currently support attendance, working hours, productive versus idle time, average activity, and booked-effort billing breakdowns. Planned task/project charts are not supported yet.', selected, used)
             if selected.get('format') is not None:
                 return reply('Charts are available on screen. Chart PDF/XLSX export is not supported yet.', selected, used)
+            if action == 'booked_time':
+                selected['chart_metric'] = 'booked_effort'
+            elif selected.get('chart_metric') == 'booked_effort':
+                return reply('For booked-effort charts, request a booked-effort report and its period.', selected, used)
             if not selected.get('chart_metric'):
                 selected['chart_metric'] = 'attendance_breakdown' if action in ('attendance', 'attendance_totals') else 'working_hours' if action in ('work_summary', 'work_review') else None
             text, charts, chart_tools = await build_report_chart(service, identity, selected)
@@ -315,12 +339,6 @@ async def semantic_reply(service, message, context, identity):
             result = await service.backend.work_report(identity, args)
             return reply(str(result.local_reply), selected, used + ['get_employee_work_report'])
         if action in TITLES:
-            if action == 'booked_time' and selected.get('project_name') and not selected.get('project_id'):
-                found = await service.backend.find_project(identity, scope, selected['project_name'], booked_effort=True)
-                used.append('project_search')
-                if found['has_more'] or len(found['matches']) != 1:
-                    return project_clarification(found, selected, used)
-                selected['project_id'] = found['matches'][0]['project_id']
             args = ManagerReportArgs(**common, report=action, project_id=selected.get('project_id') if action == 'booked_time' else None,
                                      start_date=start, end_date=end, threshold=selected.get('threshold') or 0)
             data = await service.backend.manager_report(identity, args)

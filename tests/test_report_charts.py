@@ -13,6 +13,98 @@ from tests.test_semantic_query import enable, request
 from tests.test_work_report import wire
 
 
+@pytest.mark.parametrize('kind', ['pie', 'doughnut', 'bar', 'table', 'auto', 'line'])
+def test_booked_effort_charts_use_billing_not_attendance_or_planned_time(backend, kind):
+    client, state = backend
+    mock = enable(client, state, [request(action='booked_time', subject='self', employee_name=None,
+        chart_type=kind, chart_metric='booked_effort')])
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'My booked effort chart for September'})
+    assert response.status_code == 200, response.text
+    data = response.json()['data']
+    chart = data['charts'][0]
+    assert chart['type'] == ('doughnut' if kind == 'auto' else 'bar' if kind == 'line' else kind)
+    assert chart['labels'] == ['Billable', 'Non-billable']
+    assert chart['series'][0]['values'] == [1, 0.5]
+    assert 'Total booked: 1h 30m' in chart['subtitle']
+    assert 'PRIVATE_MANAGER_NAME' in chart['title']
+    assert state['last_manager_body']['report'] == 'booked_time'
+    assert 'attendance' not in state['calls']
+    assert 'PRIVATE_MANAGER_NAME' not in str(mock.call_args)
+    saved = client.get('/v1/conversations/' + data['conversation_id'], headers=headers()).json()['data']
+    assert saved['messages'][-1]['charts'] == data['charts']
+
+
+def test_convert_plain_booked_report_to_pie_retains_employee_and_period(backend):
+    client, state = backend
+    mock = enable(client, state, [request(action='booked_time'),
+        request(action='work_summary', subject='previous', employee_name=None,
+                start_date=None, end_date=None, use_previous=False)])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Joydeep Ghosh booked effort for September'}).json()['data']
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'Convert it into Pie Chart',
+        'conversation_id': first['conversation_id']})
+    assert response.status_code == 200, response.text
+    data = response.json()['data']
+    assert data['charts'][0]['type'] == 'pie'
+    assert state['last_manager_body']['employee_id'] == 101
+    assert state['last_manager_body']['start_date'] == '2026-09-01'
+    assert state['last_manager_body']['end_date'] == '2026-09-30'
+    third = client.post('/v1/chat', headers=headers(), json={'message': 'Change it to a bar chart',
+        'conversation_id': first['conversation_id']})
+    assert third.status_code == 200, third.text
+    assert third.json()['data']['charts'][0]['series'] == data['charts'][0]['series']
+    assert mock.await_count == 2
+
+
+def test_booked_effort_chart_respects_backend_permission(backend):
+    client, state = backend
+    enable(client, state, [request(action='booked_time', subject='self', employee_name=None, chart_type='pie')])
+    state['effort_denied'] = True
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'My booked effort pie chart for September'})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+def test_booked_effort_chart_resolves_project_before_fetching(backend, ambiguous):
+    client, state = backend
+    enable(client, state, [request(action='booked_time', subject='unspecified', employee_name=None,
+        project_name='IIHM', chart_type='pie', chart_metric='booked_effort')])
+    if ambiguous:
+        state['project_matches'] = [{'project_id': 7, 'name': 'IIHM'}, {'project_id': 8, 'name': 'IIHM Support'}]
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'IIHM booked effort pie chart for September'})
+    assert response.status_code == 200, response.text
+    assert state['last_project_search']['report'] == 'booked_time'
+    if ambiguous:
+        assert 'manager-report' not in state['calls']
+        assert not response.json()['data']['charts']
+    else:
+        assert state['last_manager_body']['project_id'] == 7
+        assert response.json()['data']['charts'][0]['type'] == 'pie'
+
+
+@pytest.mark.parametrize('case', ['unclassified', 'missing', 'truncated', 'empty'])
+def test_booked_effort_chart_coverage(case):
+    billing = {'billable': {'minutes': 60, 'entry_count': 1},
+               'non_billable': {'minutes': 30, 'entry_count': 1},
+               'unclassified': {'minutes': 15 if case == 'unclassified' else 0,
+                                'entry_count': 1 if case == 'unclassified' else 0}}
+    row = dict(employee_id=1, employee_name='Employee', booked_minutes=105 if case == 'unclassified' else 90,
+               entry_count=3 if case == 'unclassified' else 2, unavailable_count=1 if case == 'missing' else 0,
+               billing=billing)
+    data = dict(report='booked_time', start_date='2026-09-01', end_date='2026-09-30', scope='self',
+                rows=[] if case == 'empty' else [row], matched_count=2 if case == 'truncated' else 1,
+                details_truncated=case == 'truncated', notice='')
+    service = SimpleNamespace(backend=SimpleNamespace(manager_report=AsyncMock(return_value=data)))
+    selected = dict(start_date='2026-09-01', end_date='2026-09-30', scope='self',
+                    chart_metric='booked_effort', chart_type='pie')
+    text, charts, used = asyncio.run(build_report_chart(service, None, selected))
+    assert used == ['get_manager_report']
+    if case == 'unclassified':
+        assert charts[0]['labels'] == ['Billable', 'Non-billable', 'Unclassified billing']
+        assert charts[0]['series'][0]['values'] == [1, 0.5, 0.25]
+    else:
+        assert not charts
+
+
 @pytest.mark.parametrize('text', [
     'Show my attendance as a pie chart for September 1',
     'Make a circle chart of my attendance for 01/09/2026',

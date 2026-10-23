@@ -86,7 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             history = store.history(conversation_id, identity)
             usage_context = conversation_context.set(conversation_id)
             try:
-                reply, tools_used, reports = await app.state.chat.reply(body.message, history, identity)
+                reply, tools_used, reports = await app.state.chat.reply(body.message, history, identity, client_platform=body.client_platform)
                 if app.state.backend:
                     await app.state.backend.revalidate(identity)
                 message = body.message
@@ -115,10 +115,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {'success': True, 'data': {'conversations': app.state.store.conversations(identity)}}
 
     @app.get('/v1/conversations/{conversation_id}')
-    def history(conversation_id: UUID, identity: Identity = Depends(authenticate)):
+    async def history(conversation_id: UUID, identity: Identity = Depends(authenticate)):
+        from app.website_help import refresh_help_history
+        rows = app.state.store.history(str(conversation_id), identity)
+        if app.state.backend:
+            rows = await refresh_help_history(rows, identity, app.state.backend)
         return {'success': True, 'data': {'conversation_id': str(conversation_id),
                 'messages': [{**{key: row[key] for key in ('role', 'content', 'created_at')}, 'charts': json.loads(row.get('charts') or '[]')}
-                             for row in app.state.store.history(str(conversation_id), identity)],
+                             for row in rows],
                 'artifacts': app.state.store.artifacts(str(conversation_id), identity)}}
 
     @app.delete('/v1/conversations/{conversation_id}', status_code=204)

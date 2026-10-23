@@ -10,6 +10,7 @@ class StrictModel(BaseModel):
 
 
 class ChatRequest(StrictModel):
+    client_platform: Literal['web', 'mobile', 'android', 'ios'] = 'web'
     message: str = Field(min_length=1, max_length=4000)
     conversation_id: UUID | None = None
 
