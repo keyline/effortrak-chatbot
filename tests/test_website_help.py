@@ -14,6 +14,29 @@ from tests.test_semantic_query import enable
 @pytest.mark.parametrize('question', [
     'How do I add an employee?', 'How to create a task?', 'Where can I find my attendance?',
     'Help me register staff', 'Show me the steps to apply for leave', 'Why can\'t I access LMS?',
+    'Could you explain bulk employee upload?',
+    'Can you please tell me how to send an employee a password reset link?',
+    'Would you show me how to assign reporting managers?',
+    'What are the steps to create a custom week-off calendar?',
+    'What is the procedure for uploading staff from Excel?',
+    'How could I configure a custom week off?',
+    'How do I invite an employee?', 'How do I create a department?',
+    'How can I change role permissions?', 'Where can I edit employee app access?',
+    'How do I edit a task?', 'How do I close a task?', 'How do I reassign a task?',
+    'Where can I edit timesheet hours?', 'How do I delete booked effort?',
+    'How can I request a missing punch-out?', 'How do I approve regularization?',
+    'How do I add a holiday?', 'How do I enable quota-based week off?',
+    'How do I set up leave policy?', 'How do I edit a project?', 'How do I edit a client?',
+    'How do I assign project work to an employee?', 'How do I add a lead follow-up?',
+    'How do I change a lead stage?', 'How do I convert a lead?', 'How do I import leads?',
+    'How do I set up payroll?', 'How do I process payroll?', 'How do I download my payslip?',
+    'How do I assign an asset?', 'How do I return an asset?', 'How do I submit an expense claim?',
+    'How do I approve expenses?', 'How do I change the AI token limit?',
+    'OTP not received on mobile', 'My app is not syncing',
+    'can I add an employee', 'Can I create an employee?', 'Could I register staff?',
+    'May I add a new user?', 'Can we please add an employee?',
+    'Can I create a task?', 'Can I apply for leave?', 'Can I reset an employee password?',
+    'Can I import employees?', 'Can I change the AI token limit?',
 ])
 def test_help_precedes_model_and_report_routing(backend, question):
     client, state = backend
@@ -45,12 +68,43 @@ def test_help_precedes_model_and_report_routing(backend, question):
     'Show my attendance for this month.', 'How many employees are present today?',
     'How much effort did Joydeep book last month?', 'Convert it into a pie chart',
     'Add an employee named Alice', 'Show approved leave for my company this month.',
+    'Can you explain my attendance totals?', 'Could you describe my booked effort report?',
+    'Can you tell me how days Joydeep Ghosh late for last month',
+    'Can you tell me how days Joydeep Ghosh attendance late for last month',
     'Show my latest 10 tasks', 'video',
+    'Can I see my attendance for yesterday?', 'Can I download my attendance report?',
+    'Could you add an employee named Alice?', 'Can you add an employee named Alice?',
 ])
 def test_report_and_mutation_requests_are_not_intercepted(question):
     backend = SimpleNamespace(call=AsyncMock())
     assert asyncio.run(website_help(question, {}, SimpleNamespace(credential='test'), backend)) is None
     backend.call.assert_not_awaited()
+
+
+def test_capability_question_after_instruction_keeps_help_route(backend):
+    client, state = backend
+    model = enable(client, state, [])
+    service = client.app.state.chat
+    original = service.backend.call
+    help_calls = []
+
+    async def call(endpoint, token, body=None):
+        if endpoint != 'help':
+            return await original(endpoint, token, body)
+        help_calls.append(body)
+        return dict(topic_id='employee_add', status='answered',
+                    reply='Website help: Add an employee\n1. Open User & Permission Management > Employees.')
+
+    service.backend.call = call
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'how to add an employee'})
+    assert first.status_code == 200
+    cid = first.json()['data']['conversation_id']
+    second = client.post('/v1/chat', headers=headers(), json={'message': 'can I add an employee', 'conversation_id': cid})
+    assert second.status_code == 200, second.text
+    assert second.json()['data']['reply'] == first.json()['data']['reply']
+    assert help_calls[-1]['previous_topic'] == 'employee_add'
+    model.assert_not_awaited()
+    assert 'manager-report' not in state['calls']
 
 
 def test_help_followup_uses_topic_not_cached_answer():

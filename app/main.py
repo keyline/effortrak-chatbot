@@ -89,6 +89,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 reply, tools_used, reports = await app.state.chat.reply(body.message, history, identity, client_platform=body.client_platform)
                 if app.state.backend:
                     await app.state.backend.revalidate(identity)
+                from app.help_features import followup_suggestions
+                suggestions = await followup_suggestions(app.state.backend,
+                    getattr(reply, 'query_context', None) or {}, identity,
+                    config.ai_help_followups_enabled, body.client_platform)
                 message = body.message
                 if app.state.backend and (named_attendance(message) or named_tasks(message) or 'export_attendance' in tools_used
                                           or 'project_search' in tools_used or 'get_project_tasks' in tools_used
@@ -106,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             artifacts = [{key: report[key] for key in ('report_id', 'filename', 'format', 'download_url')}
                          for report in reports]
             return ChatResponse(data=ChatData(conversation_id=conversation_id, reply=reply,
+                                suggestions=suggestions,
                                 charts=getattr(reply, 'charts', []),
                                 mode=config.chat_mode, data_source=identity.data_source,
                                 tools_used=tools_used, artifacts=artifacts, quota=await usage_status(identity)))
@@ -120,9 +125,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rows = app.state.store.history(str(conversation_id), identity)
         if app.state.backend:
             rows = await refresh_help_history(rows, identity, app.state.backend)
+        from app.help_features import followup_suggestions
+        suggestions = await followup_suggestions(app.state.backend,
+            json.loads(rows[-1].get('query_context') or '{}') if rows and rows[-1]['role'] == 'assistant' else {},
+            identity, config.ai_help_followups_enabled)
         return {'success': True, 'data': {'conversation_id': str(conversation_id),
-                'messages': [{**{key: row[key] for key in ('role', 'content', 'created_at')}, 'charts': json.loads(row.get('charts') or '[]')}
-                             for row in rows],
+                'messages': [{**{key: row[key] for key in ('role', 'content', 'created_at')}, 'charts': json.loads(row.get('charts') or '[]'),
+                              'suggestions': suggestions if index == len(rows) - 1 else []}
+                             for index, row in enumerate(rows)],
                 'artifacts': app.state.store.artifacts(str(conversation_id), identity)}}
 
     @app.delete('/v1/conversations/{conversation_id}', status_code=204)

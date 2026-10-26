@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     openai_model: str = ''
     semantic_questions: bool = False
     ai_token_metering_enabled: bool = False
+    ai_help_llm_fallback_enabled: bool = False
+    ai_help_followups_enabled: bool = False
     database_path: str = 'data/chat.sqlite3'
     data_mode: Literal['sample', 'backend'] = 'sample'
     backend_url: str = ''

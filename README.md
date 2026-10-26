@@ -1,5 +1,8 @@
 # Effortrak AI REST API - local prototype
 
+Server administrators: use the [Server Operations Guide](docs/server-operations-guide.md)
+for the short cPanel start/restart procedure, settings and troubleshooting.
+
 Manager-report questions, deployment permissions and current limitations are listed in
 [the manager question catalogue](docs/manager-question-catalogue.md).
 

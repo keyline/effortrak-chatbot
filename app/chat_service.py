@@ -147,7 +147,7 @@ class ChatService:
     async def reply(self, message: str, history: list[dict], identity: Identity, *, client_platform='web') -> tuple[str, list[str], list[dict]]:
         context = trusted_query(history)
         if self.backend:
-            help_result = await website_help(message, context, identity, self.backend, client_platform)
+            help_result = await website_help(message, context, identity, self.backend, client_platform, service=self)
             if help_result is not None:
                 return help_result
         if self.backend and history and history[-1]['role'] == 'assistant':

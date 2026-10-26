@@ -164,7 +164,13 @@ class ReportChart(StrictModel):
         return self
 
 
+class FollowupSuggestion(StrictModel):
+    label: str = Field(min_length=1, max_length=120)
+    question: str = Field(min_length=1, max_length=500)
+
+
 class ChatData(StrictModel):
+    suggestions: list[FollowupSuggestion] = Field(default_factory=list, max_length=3)
     charts: list[ReportChart] = Field(default_factory=list, max_length=3)
     quota: dict | None = None
     conversation_id: UUID
