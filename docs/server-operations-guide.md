@@ -86,6 +86,19 @@ with developer copies. Copy SQLite files only while stopped, or use SQLite
 backup tools. Python code and AI `.env` changes require a worker restart;
 FAQ-text-only changes do not. Run SQL only when a release explicitly requires it.
 
+### Report Export Update
+
+Deploy the AI service and web `AiExportChart.php`, `AiAttendanceService.php` and
+`AiAttendanceExportService.php` together. Back up AI SQLite state first, then restart
+the worker. SQLite adds private export-snapshot columns automatically; no MySQL
+migration or mobile UI rebuild is needed for the existing download controls.
+
+Test on web and mobile: display an authorized report, then ask `Make that a PDF`
+and `Give me this report in Excel format`. PDF contains rendered charts; Excel
+contains editable charts. Files contain the displayed selection, not undisplayed
+pages. If data or permissions change, regenerate the report before downloading.
+Old chat answers need a fresh report before using the new export follow-ups.
+
 ## Essential Settings
 
 - AI `.env`: `DATA_MODE=backend`, `CHAT_MODE=openai`.

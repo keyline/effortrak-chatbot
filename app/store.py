@@ -33,9 +33,12 @@ class Store:
                 );
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(messages)')}
-            for column in ('model_content', 'query_context', 'charts'):
+            for column in ('model_content', 'query_context', 'charts', 'export_snapshot'):
                 if column not in columns:
                     db.execute(f'ALTER TABLE messages ADD COLUMN {column} TEXT')
+            report_columns = {row['name'] for row in db.execute('PRAGMA table_info(reports)')}
+            if 'export_snapshot' not in report_columns:
+                db.execute('ALTER TABLE reports ADD COLUMN export_snapshot TEXT')
 
     @contextmanager
     def connect(self):
@@ -66,7 +69,7 @@ class Store:
         self.assert_owner(conversation_id, identity)
         with self.connect() as db:
             rows = db.execute(
-                'SELECT role,content,created_at,model_content,query_context,charts FROM messages WHERE conversation_id=? ORDER BY id',
+                'SELECT role,content,created_at,model_content,query_context,charts,export_snapshot FROM messages WHERE conversation_id=? ORDER BY id',
                 (conversation_id,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -95,14 +98,15 @@ class Store:
         now = datetime.now(timezone.utc).isoformat()
         with self.connect() as db:
             context = getattr(reply, 'query_context', None)
-            db.executemany('INSERT INTO messages(conversation_id,role,content,created_at,model_content,query_context,charts) VALUES (?,?,?,?,?,?,?)',
-                           [(conversation_id, 'user', str(message), now, getattr(message, 'model_content', str(message)), None, None),
+            db.executemany('INSERT INTO messages(conversation_id,role,content,created_at,model_content,query_context,charts,export_snapshot) VALUES (?,?,?,?,?,?,?,?)',
+                           [(conversation_id, 'user', str(message), now, getattr(message, 'model_content', str(message)), None, None, None),
                             (conversation_id, 'assistant', str(reply), now, getattr(reply, 'model_content', str(reply)),
-                             json.dumps(context) if context is not None else None, json.dumps(getattr(reply, 'charts', [])))])
+                             json.dumps(context) if context is not None else None, json.dumps(getattr(reply, 'charts', [])),
+                             json.dumps(getattr(reply, 'export_snapshot', None)))])
             for report in reports:
-                db.execute('INSERT INTO reports VALUES (?,?,?,?,?,?)', (
+                db.execute('INSERT INTO reports(id,conversation_id,filename,format,payload,employee_ids,export_snapshot) VALUES (?,?,?,?,?,?,?)', (
                     report['report_id'], conversation_id, report['filename'], report['format'],
-                    report['payload'], json.dumps(report['employee_ids']),
+                    report['payload'], json.dumps(report['employee_ids']), json.dumps(report.get('export_snapshot')),
                 ))
 
     def get_report(self, report_id: str, identity: Identity) -> dict:

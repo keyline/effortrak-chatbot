@@ -55,6 +55,8 @@ def named_request(message: str, before, after) -> tuple[str, str | None, str | N
 
 
 def model_query_context(context: dict) -> dict:
+    if context.get('source') == 'local_visit_location':
+        return {'kind': 'visit_location', 'notice': 'Visit and location selections stay local.'}
     if context.get('source') in ('local_employee_search', 'local_project_search', 'local_manager_report'):
         return {key: value for key, value in context.items() if key not in ('employee_ids', 'employee_id', 'employee_name', 'source', 'project_id', 'project_name')}
     return context

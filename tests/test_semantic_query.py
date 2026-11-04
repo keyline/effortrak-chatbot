@@ -200,9 +200,10 @@ def test_pdf_followup_retains_employee_and_period(backend):
     second = client.post('/v1/chat', headers=headers(), json={'message': 'Make that a PDF',
         'conversation_id': first.json()['data']['conversation_id']})
     assert second.status_code == 200
-    assert state['last_export_body']['employee_id'] == 101
-    assert state['last_export_body']['start_date'] == '2026-09-01'
-    assert state['last_export_body']['end_date'] == '2026-09-30'
+    assert state['last_manager_body']['employee_id'] == 101
+    assert state['last_manager_body']['start_date'] == '2026-09-01'
+    assert state['last_manager_body']['end_date'] == '2026-09-30'
+    assert second.json()['data']['tools_used'] == ['export_report']
     assert len(second.json()['data']['artifacts']) == 1
 
 

@@ -213,8 +213,8 @@ company/user identity from the signed credential, not the body. They use the
 same self/team/company employee policy, reject unauthorized scopes, and are
 read-only. Leave reasons and client details are omitted. Daily task descriptions and status/employee
 names are returned to the local renderer, not to OpenAI.
-Leave balances, payroll, expenses, new exports and write actions are not part
-of this phase. Leave history is not yet a chatbot tool. Daily tasks and monthly task summaries
+Payroll, expenses and write actions are not part of these tools. Leave balances now have a
+dedicated read tool; leave history is not yet a chatbot tool. Daily tasks and monthly task summaries
 are now web-chat tools when the task module is authorized. Named attendance requests are resolved locally through
 the protected employee-search endpoint. Matched names/IDs are displayed locally, not sent to OpenAI as lookup
 results or automatically included in later model context. Ambiguous or truncated searches require clarification.
@@ -235,8 +235,8 @@ status IDs, task counts, planned minutes and pagination. Descriptions, employee 
 are rendered locally and excluded from model tool results. Chat storage keeps a separate redacted
 `model_content` and trusted `query_context` for follow-ups; API history still displays the original local
 reply. The SQLite service adds these columns idempotently on startup. No application-database migration
-or global permission grants are needed. Description analysis by the model, task exports, booked effort,
-project/client details, task changes and Flutter integration are not supported by these task tools.
+or global permission grants are needed. Description analysis by the model and task changes
+are not supported. Task exports are now available through the shared report exporter below.
 
 ### Named attendance requests
 
@@ -254,6 +254,30 @@ Daily task details include booked time from linked timesheet entries when availa
 from planned time. Missing bookings are not treated as recorded zeroes; daily totals cover
 available linked entries across all pages. Links are checked against both company and employee.
 
+### Shared Report Exports
+
+Display a report, then ask `Give me this report in Excel format` or `Make that a PDF`.
+This works with attendance, tasks/project tasks, manager reports, booked effort,
+work summaries/reviews, leave-balance rankings, employee counts and visits/locations.
+Only implemented report tools are exportable; help instructions are not reports.
+
+- PDF contains rendered charts and tables. Excel (XLSX) contains editable native charts and data sheets.
+- Existing on-screen charts are retained. Other reports get meaningful summary charts when possible;
+  locations remain data tables, not numeric-coordinate charts. Up to 10 charts are included.
+- The file covers the displayed result and returned data, not undisplayed pages. Existing scope,
+  pagination, missing-data and truncation notes still apply. Oversized results require a narrower selection.
+- Export follow-ups do not call OpenAI or send report records to the model.
+- Existing export permission is required. Original read permissions and filters are checked again
+  when generating AND downloading the file. Changed data/access requires a fresh report.
+- Saved report snapshots are private server-side metadata, never API history fields or model context.
+- Answers created before this update must be regenerated before using shared exports.
+
+Deployment: back up the AI SQLite state, deploy the Python changes and web
+`AiExportChart.php`, `AiAttendanceService.php`, `AiAttendanceExportService.php` together,
+then restart the AI worker. SQLite adds nullable `export_snapshot` columns automatically.
+No MySQL migration, new dependency or mobile UI rebuild is required for these attachments.
+Existing direct attendance exports remain supported and now include status charts.
+
 ### AI Attendance Export Options
 
 Project task queries are also handled locally. Try `Show project IIHM task details from
@@ -262,7 +286,7 @@ Project task queries are also handled locally. Try `Show project IIHM task detai
 and have tasks visible under the user's employee/department permissions. Date ranges are
 inclusive and limited to 93 days. Missing dates and page changes retain the selected project.
 An optional explicit employee ID further restricts the project result. Project names and task
-descriptions are not sent to OpenAI. Project task PDF/XLSX export is not implemented.
+descriptions are not sent to OpenAI. Project task PDF/XLSX exports use the shared report exporter below.
 
 Latest-task queries support `Show me last 5 tasks of ARC Promotion` or, after selecting
 a project, `Show last 5 tasks`. Without explicit dates they search all authorized project
@@ -303,3 +327,81 @@ They remain disabled until explicitly configured. `CHAT_MODE` selects the
 responder; `DATA_MODE` independently selects sample versus real backend data.
 Add production rate limiting, retention, auditing and deployment hardening
 before publishing. Do not switch to production simply by changing either mode.
+
+## Client Visits and Recorded Locations
+
+The shared web/mobile chatbot supports these read-only questions and common alternative wordings:
+
+- "Which client did Joydeep Ghosh last visit?"
+- "Show Joydeep Ghosh's visits today."
+- "Who visited ABC Client in the last 7 days?"
+- "Show Joydeep Ghosh's visits to ABC Client from 01/10/2026 to 15/10/2026."
+- "Where is Joydeep Ghosh now?"
+- "Show Joydeep Ghosh's recorded location on 06/10/2026."
+- "Show LMS lead ABC location."
+
+Visits use Field Sales check-in records, newest first. Check-out times are not stored and
+are not invented. Use an inclusive period of up to 93 days; "last 7 days" includes today.
+An undated latest-visit question checks recorded history. Undated visit lists ask for a
+period. Lists have 20 rows per page; "next page" retains the employee/client/period.
+Employee IDs can be supplied during name clarification. Ambiguous or unavailable names
+require clarification; they never select an arbitrary match. Scope selection is bounded
+by existing active-employee visibility, with at most 50 report employees.
+
+Employee location means the latest stored adaptive GPS point, optionally within a date
+range, not an on-demand live device reading. The response includes capture time, source,
+available accuracy, and mock-GPS warnings. Historical GPS may also come from the archive.
+LMS locations are saved lead coordinates/addresses: scheduled follow-ups are not proof
+of a visit. LMS lead visibility is restricted by assignment and manage-all permissions.
+
+The backend rechecks company AI enablement, module subscription, role permissions, and
+employee visibility for every request. Visits require Field Sales plus CLIENT VISIT LOGS;
+adaptive GPS requires adaptive_tracking plus LOCATION HUB. LMS requires its subscription
+and LMS permission, with individual access/assignment restrictions. Attendance locations
+retain their separate AI attendance-location permission.
+
+Stored addresses are preferred. Missing addresses can use the existing Google geocoding
+helper and GOOGLE_MAPS_API_KEY, with at most two uncached lookups per request, a one-day
+company-scoped cache, and a five-minute unsuccessful-lookup cache. These lookups can incur
+Maps charges. If a lookup is unavailable or the budget is exhausted, coordinates and an
+Open in Maps link remain available. Addresses are approximate, not proof of presence.
+Capture tables and GPS workflows are not changed by this feature.
+
+Deploy the updated PHP backend and AI service together, then restart the Python service.
+The new protected endpoint is POST apiv2/ai/internal/visit-location. No new SQL migration
+is needed on an updated database containing the existing visit/GPS/LMS tables. Deploy web
+assets for clickable map links; rebuild the Flutter app for native map-link buttons.
+Users may need a new chat because the available-module policy fingerprint has changed.
+Recognized visit/location questions bypass the LLM, including when semantic questions are
+enabled; visit/address results and these questions are redacted from model-facing history.
+
+### Leave Balance Rankings
+
+Examples: "Show me employees with the highest leave balance this year", "Who has the
+most leave remaining?", "Top 5 employees with highest Annual Leave balance for 2026-27",
+and "Rank my team by unused leave balance". A follow-up such as "Top 5 instead" keeps
+the selected year and leave type. Common wording runs locally without an LLM call;
+other paraphrases use the existing semantic interpreter when enabled.
+
+Uses the existing Leave Balance page's stored allocated-minus-used figures, including
+manual adjustments. "This year" means the company's active financial year, shown in
+the answer. Explicit years select the FY start year (2026 or 2026-27). Each leave type
+is ranked separately, highest first, with up to 50 employees per type (default 10).
+Highest-balance rankings show only positive remaining balances by default. Explicit
+requests can select all, zero or negative remaining balances; "Only zero" or "Show all"
+follow-ups retain the selected year/type. Empty zero-only categories are omitted from
+positive rankings. Negative stored Used values are preserved, never converted to positive.
+Lowest/least/fewest remaining leave requests sort smallest first and include zero but
+exclude negative balances by default. Explicit negative/all filters remain available.
+Examples: "Show 5 employees with the lowest Paid Leave balance" and "Who has the least
+leave remaining?" Direction-only follow-ups such as "lowest instead" keep the year/type.
+Both directions default to 10 employees per leave type and allow at most 50 per type;
+the web/app View more control expands only those returned rows, not an unlimited list.
+Unlimited entitlements are counted separately, not ranked as negative balances. Missing
+records are not zero. This is not a historical as-of snapshot or projected entitlement.
+
+Requires the Attendance subscription, Leave Balance function permission, and existing
+company/team employee visibility. Read-only: no changes to leave requests or balances.
+Deploy both PHP and Python changes and restart the AI service. The protected endpoint
+is POST apiv2/ai/internal/leave-balance. No new SQL migration or Flutter rebuild is
+required on the updated application schema; both web and mobile use the shared chat API.

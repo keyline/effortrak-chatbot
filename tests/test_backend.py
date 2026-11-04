@@ -76,6 +76,23 @@ def backend(tmp_path):
             if body['scope'] not in state.get('count_scopes', ['self']):
                 return httpx.Response(403, json={'success': False})
             data = dict(data_source='effortrak_backend', scope=body['scope'], employee_count=1)
+        elif endpoint == 'leave-balance':
+            body = json.loads(request.content)
+            state['last_balance_body'] = body
+            if state.get('balance_denied'):
+                return httpx.Response(403, json={'success': False, 'message': 'Leave balance permission is required.'})
+            data = state['balance_data']
+        elif endpoint == 'visit-location':
+            body = json.loads(request.content)
+            state['last_visit_body'] = body
+            if state.get('visit_denied'):
+                return httpx.Response(403, json={'success': False, 'message': 'Location or client-visit report permission is required.'})
+            from tests.test_visit_query import response
+            data = response(body['action'])
+            data.update(start_date=body.get('start_date'), end_date=body.get('end_date'))
+        elif endpoint == 'work-report':
+            from tests.test_work_report import payload
+            data = payload(json.loads(request.content))
         elif endpoint == 'manager-report':
             body = json.loads(request.content)
             state['last_manager_body'] = body

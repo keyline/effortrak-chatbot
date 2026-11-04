@@ -98,7 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                           or 'project_search' in tools_used or 'get_project_tasks' in tools_used
                                           or 'get_manager_report' in tools_used or capability_reply(message) or report_kind(message)
                                           or 'get_employee_work_report' in tools_used
-                                          or (getattr(reply, 'query_context', None) or {}).get('source') in ('local_project_search', 'local_manager_report')):
+                                          or (getattr(reply, 'query_context', None) or {}).get('source') in ('local_project_search', 'local_manager_report', 'local_visit_location', 'local_leave_balance')):
                     message = AssistantReply(message, model_content='An employee report was requested by name and handled locally.')
                 store.save_turn(conversation_id, identity, message, reply, reports)
             except Exception:
@@ -144,7 +144,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get('/v1/reports/{report_id}/download')
     async def download(report_id: UUID, identity: Identity = Depends(authenticate)):
         report = app.state.store.get_report(str(report_id), identity)
-        if app.state.backend:
+        snapshot = json.loads(report.get('export_snapshot') or 'null')
+        if app.state.backend and snapshot:
+            from app.report_export import authorize
+            await authorize(snapshot, identity, app.state.backend)
+        elif app.state.backend:
             await app.state.backend.authorize_report(identity, json.loads(report['employee_ids']))
         elif not identity.can_export or not set(json.loads(report['employee_ids'])).issubset(allowed_employee_ids(identity)):
             raise HTTPException(403, 'You no longer have permission to download this report.')

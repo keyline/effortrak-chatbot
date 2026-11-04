@@ -15,6 +15,8 @@ from app.work_report import wants_review
 from app.manager_query import render_report, TITLES
 from app.attendance_report import format_daily_report, format_monthly_report
 from app.task_report import AssistantReply
+from app.leave_balance_query import balance_report
+from app.report_export import defer_export
 from app.report_charts import CHART_REQUEST, TYPE_ONLY, build_report_chart, chart_reply
 
 
@@ -32,7 +34,11 @@ class Question(StrictModel):
                     'late', 'late_punchin', 'missing_punchout', 'present', 'absent', 'work_arrangements',
                     'locations', 'missing_location', 'effort_by_employee', 'effort_by_project',
                     'task_overruns', 'workload', 'approved_leave', 'attendance_totals', 'booked_time',
-                    'work_summary', 'work_review', 'greeting', 'unsupported', 'clarify']
+                    'work_summary', 'work_review', 'leave_balance', 'greeting', 'unsupported', 'clarify']
+    financial_year: str | None = None
+    leave_type: str | None = None
+    balance_filter: Literal['positive', 'nonnegative', 'all', 'zero', 'negative'] | None = None
+    ranking: Literal['highest', 'lowest'] | None = None
     subject: Literal['self', 'team', 'company', 'employee', 'previous', 'unspecified']
     employee_name: str | None
     project_name: str | None
@@ -49,6 +55,20 @@ class Question(StrictModel):
 
 
 INSTRUCTIONS = '''Interpret the user's question, never answer it or invent records. Call interpret_question once.
+Rank employees by remaining/unused/available leave using leave_balance, not approved_leave.
+For highest leave balances use balance_filter=positive. Only explicit requests for all,
+zero/exhausted or negative/overdrawn balances set all, zero or negative respectively.
+For lowest/least/fewest/smallest remaining leave choose ranking=lowest, balance_filter=nonnegative
+(include zero, exclude negatives). Highest/most use ranking=highest. Honor an explicit top/bottom
+employee count using latest_limit; default 10, maximum 50 per leave type. Order-only follow-ups
+retain financial year/type/scope but reset the default filter appropriately for the new ranking.
+Use financial_year=null for this/current year (company active financial year), or the explicitly
+requested start year / FY label such as 2026 or 2026-27. Never infer a calendar-year snapshot.
+Set leave_type to the full explicitly requested type, otherwise null. latest_limit is the top
+count (1 to 50), otherwise null. Subject must be company or team. Named-employee filters,
+historical as-of snapshots and on-screen charts for leave balance are unsupported: clarify.
+PDF/Excel exports of implemented reports are generated locally by the server, including charts
+where appropriate. Use the report's read action; never invent filenames, links or successful exports.
 Chart/graph/visual requests use chart_type and chart_metric. Ordinary text questions set both null.
 Recognize pie/pi/circle chart, donut/doughnut, bar/column chart, line graph and spelling variants.
 Use auto if visualization requested without a type. Attendance distribution/breakdown is
@@ -60,7 +80,7 @@ Pie/doughnut charts show billable versus non-billable hours, including unclassif
 when present. Bar/table charts use the same billing breakdown, not daily or planned hours.
 For "convert it into a pie chart" after a booked-effort report retain booked_time, the
 selected employee/project and period. Never substitute attendance or work_summary.
-Chart periods support up to 31 days. These charts do not export to PDF/XLSX.
+Chart periods support up to 31 days. The server can export displayed charts to PDF/XLSX.
 Task charts and previous-period side-by-side comparisons are unsupported in this release;
 never substitute attendance for those requests. Ask for missing scope/date rather than inventing.
 For chart follow-ups (same report last month, only my team) use_previous=true; retain the chart
@@ -123,7 +143,7 @@ locations/missing_location are recorded captures, not live tracking, geofence or
 work_arrangements is current permitted WFH/WFO configuration only. Historical daily modes and
 approvals are unsupported. approved_leave is approved requests, not pending approval queues.
 effort_by_employee/project, task_overruns, workload are planned/task-linked effort insights.
-No actions, approvals, notifications, schedules, LMS, client visits, client-wide/task exports,
+No actions, approvals, notifications, schedules, LMS or client visits through this interpreter,
 deadlines/capacity predictions or arbitrary SQL. Mark these unsupported, do not substitute reports.
 If user says my/mine/I, subject=self, never ask own ID. Team/company scopes must be explicit
 unless asking about a named employee/project; employee resolution uses available authorized scope.
@@ -157,6 +177,13 @@ def project_clarification(found, selected, used):
 
 async def interpret(service, message, context, identity):
     previous = context.get('selection', {}) if context.get('kind') == 'semantic_question' else {}
+    if context.get('kind') == 'leave_balance' and context.get('args'):
+        args = context['args']
+        previous = {'action': 'leave_balance', 'subject': args.get('scope', 'company'),
+                    'financial_year': args.get('financial_year'), 'leave_type': args.get('leave_type'),
+                    'balance_filter': args.get('balance_filter', 'positive'),
+                    'ranking': args.get('ranking', 'highest'),
+                    'latest_limit': args.get('limit', 10)}
     if not previous and context:
         ids = context.get('employee_ids', [])
         previous = {'action': context.get('report') or ('project_tasks' if context.get('project_id') else
@@ -196,9 +223,11 @@ async def interpret(service, message, context, identity):
 
 async def semantic_reply(service, message, context, identity):
     question, previous = await interpret(service, message, context, identity)
+    if defer_export.get():
+        question = question.model_copy(update={'format': None, 'action': 'attendance' if question.action == 'export_attendance' else question.action})
     selected = question.model_dump()
     if question.use_previous:
-        for key in ('employee_name', 'project_name', 'start_date', 'end_date', 'latest_limit', 'format', 'report_type', 'threshold', 'chart_type', 'chart_metric'):
+        for key in ('employee_name', 'project_name', 'start_date', 'end_date', 'latest_limit', 'format', 'report_type', 'threshold', 'chart_type', 'chart_metric', 'financial_year', 'leave_type', 'balance_filter', 'ranking'):
             if selected[key] is None:
                 selected[key] = previous.get(key)
         if question.subject == 'previous':
@@ -216,6 +245,19 @@ async def semantic_reply(service, message, context, identity):
             selected.pop('employee_id', None)
             selected.pop('scope', None)
     action = question.action
+    if action == 'leave_balance':
+        if question.use_previous and question.ranking is not None and question.ranking != previous.get('ranking') and question.balance_filter is None:
+            selected['balance_filter'] = 'nonnegative' if question.ranking == 'lowest' else 'positive'
+        if (question.employee_name or question.project_name or question.subject in ('employee', 'self')
+                or question.chart_type or question.format or question.start_date or question.end_date):
+            return reply('Leave balance rankings support your company or authorized team, by configured financial year and leave type. Historical snapshots, exports, charts and individual-name filters are not supported.', {})
+        return await balance_report(identity, service.backend, {
+            'scope': selected['subject'] if selected['subject'] in ('team', 'company') else None,
+            'financial_year': selected['financial_year'], 'leave_type': selected['leave_type'],
+            'limit': selected['latest_limit'] if selected['latest_limit'] is not None else 10,
+            'balance_filter': selected['balance_filter'] or ('nonnegative' if selected['ranking'] == 'lowest' else 'positive'),
+            'ranking': selected['ranking'] or 'highest',
+        })
     if TYPE_ONLY.fullmatch(message) and previous.get('action') == 'booked_time':
         action = 'booked_time'
         kind = TYPE_ONLY.fullmatch(message)[1].lower()

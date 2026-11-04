@@ -20,6 +20,8 @@ from app.tools import attendance, definitions, export_attendance
 from app.export_request import export_request
 from app.project_query import project_reply
 from app.manager_query import manager_reply
+from app.visit_query import visit_reply
+from app.leave_balance_query import leave_balance_reply
 from app.semantic_query import semantic_reply
 from app.token_usage import TokenMeter
 from app.work_report import wants_review
@@ -145,11 +147,21 @@ class ChatService:
         return {'error': 'Unknown tool. Only attendance tools are available.'}
 
     async def reply(self, message: str, history: list[dict], identity: Identity, *, client_platform='web') -> tuple[str, list[str], list[dict]]:
+        from app.report_export import reply_with_exports
+        return await reply_with_exports(self, message, history, identity, client_platform)
+
+    async def _reply(self, message: str, history: list[dict], identity: Identity, *, client_platform='web') -> tuple[str, list[str], list[dict]]:
         context = trusted_query(history)
         if self.backend:
+            balance_result = await leave_balance_reply(message, context, identity, self.backend)
+            if balance_result is not None:
+                return balance_result
             help_result = await website_help(message, context, identity, self.backend, client_platform, service=self)
             if help_result is not None:
                 return help_result
+            visit_result = await visit_reply(message, context, identity, self.backend)
+            if visit_result is not None:
+                return visit_result
         if self.backend and history and history[-1]['role'] == 'assistant':
             previous_charts = json.loads(history[-1].get('charts') or '[]')
             changed = restyle(message, previous_charts)

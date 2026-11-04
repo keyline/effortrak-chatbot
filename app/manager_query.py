@@ -227,6 +227,8 @@ def render_report(data, *, include_names=True):
                 place = f"{point['latitude']}, {point['longitude']}" if point else 'GPS not recorded'
                 address = row[key + '_address']
                 lines.append(f'{label}: {address + "; " if address else ""}{place}.')
+                if point:
+                    lines.append(f"Open in Maps: https://www.google.com/maps/search/?api=1&query={point['latitude']}%2C{point['longitude']}")
         else:
             booked = duration(row['booked_minutes']) if row['booked_minutes'] is not None else 'not available'
             task = f" | Task #{row['task_id']}" if 'task_id' in row else ''

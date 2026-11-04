@@ -50,6 +50,16 @@ class BackendClient:
             # Forward only audited messages; arbitrary backend details remain private.
             if status == 429 and endpoint == 'token-reserve':
                 raise HTTPException(429, 'Company AI token allowance is insufficient for this request. Contact your administrator.')
+            if endpoint == 'visit-location' and status in (413, 422):
+                try:
+                    message = response.json().get('message')
+                except (ValueError, AttributeError):
+                    message = None
+                if message in ('Select one employee for a last recorded location.', 'Future location records are unavailable.',
+                               'Client location storage is unavailable.', 'Visit storage is unavailable.', 'GPS location storage is unavailable.',
+                               'Use the existing client report to narrow this large client catalogue.',
+                               'Limit the report to a team or employee (maximum 50 employees).'):
+                    raise HTTPException(status, message)
             if endpoint == 'work-report' and status in (413, 422):
                 try:
                     message = response.json().get('message')
@@ -64,6 +74,10 @@ class BackendClient:
                 except (ValueError, AttributeError):
                     message = None
                 safe_messages = {
+                    'Leave balance permission is required.':
+                        'Your role needs Leave Balance permission to view employee leave balances.',
+                    'Location or client-visit report permission is required.':
+                        'Your company subscription and role must allow the requested client-visit or location report. Ask your administrator to check access.',
                     'Daily report permission is required for work reports.':
                         'Your role needs Daily Report permission to view employee work summaries.',
                     'Effort report permission is required.':
@@ -112,6 +126,8 @@ class BackendClient:
             result = response.json()
             if result.get('success') is not True or not isinstance(result.get('data'), dict):
                 raise ValueError('Invalid envelope')
+            from app.report_export import capture
+            capture(endpoint, body, result['data'])
             return result['data']
         except (ValueError, TypeError, AttributeError):
             raise HTTPException(502, 'Invalid Effortrak backend response.') from None
@@ -123,7 +139,7 @@ class BackendClient:
             if (context.company_id != company_id or context.user_id != user_id
                     or context.data_source != 'effortrak_backend' or not context.scopes
                     or not set(context.scopes).issubset({'self', 'team', 'company'})
-                    or not context.modules or not set(context.modules).issubset({'attendance', 'leave', 'tasks'})):
+                    or not context.modules or not set(context.modules).issubset({'attendance', 'leave', 'tasks', 'visits', 'location', 'lms'})):
                 raise ValueError('Identity mismatch')
         except (ValidationError, ValueError):
             raise HTTPException(502, 'Backend identity or permission context is invalid.') from None
