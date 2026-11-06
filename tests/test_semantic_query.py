@@ -137,8 +137,57 @@ def test_unauthorized_company_scope_is_not_changed_to_self(backend):
     enable(client, state, [request(subject='company', employee_name=None)])
     state['scopes'] = ['self']
     response = client.post('/v1/chat', headers=headers(), json={'message': 'Show all company late punch-ins'})
-    assert response.status_code == 403
+    assert response.status_code == 200
+    assert 'only your own records' in response.json()['data']['reply']
     assert 'manager-report' not in state['calls']
+
+
+@pytest.mark.parametrize('platform', ['web', 'mobile'])
+@pytest.mark.parametrize('scope', ['team', 'company'])
+@pytest.mark.parametrize('action', ['late_punchin', 'attendance', 'tasks', 'booked_time', 'export_attendance'])
+def test_unavailable_scope_is_a_chat_reply_without_record_reads(backend, platform, scope, action):
+    client, state = backend
+    enable(client, state, [request(action=action, subject=scope, employee_name=None,
+        format='pdf' if action == 'export_attendance' else None)])
+    state['scopes'] = ['self']
+    response = client.post('/v1/chat', headers=headers(), json={
+        'message': 'Show all employees punching in after 10:30 AM last month', 'client_platform': platform})
+    assert response.status_code == 200, response.text
+    data = response.json()['data']
+    assert 'only your own records' in data['reply']
+    assert 'Please ask about your own records instead.' in data['reply']
+    assert not data['artifacts']
+    assert set(state['calls']) <= {'context'}
+
+
+def test_team_access_does_not_allow_company_scope_or_downgrade_report(backend):
+    client, state = backend
+    enable(client, state, [request(subject='company', employee_name=None)])
+    state['scopes'] = ['self', 'team']
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'Show all company late punch-ins'})
+    assert response.status_code == 200
+    assert 'requested employee scope' in response.json()['data']['reply']
+    assert 'only your own records' not in response.json()['data']['reply']
+    assert set(state['calls']) <= {'context'}
+
+
+@pytest.mark.parametrize('platform', ['web', 'mobile'])
+def test_personal_request_after_scope_denial_reads_only_self(backend, platform):
+    client, state = backend
+    enable(client, state, [request(subject='company', employee_name=None),
+        request(subject='self', employee_name=None)])
+    state['scopes'] = ['self']
+    first = client.post('/v1/chat', headers=headers(), json={
+        'message': 'Show company late punch-ins', 'client_platform': platform})
+    assert first.status_code == 200
+    assert set(state['calls']) <= {'context'}
+    result = client.post('/v1/chat', headers=headers(), json={
+        'message': 'Show my late punch-ins for September', 'client_platform': platform,
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert result.status_code == 200, result.text
+    assert state['last_manager_body']['scope'] == 'self'
+    assert state['last_manager_body']['employee_id'] is None
+    assert 'employee-search' not in state['calls']
 
 
 def test_personal_questions_use_authenticated_user(backend):
@@ -149,6 +198,225 @@ def test_personal_questions_use_authenticated_user(backend):
     assert state['last_manager_body']['scope'] == 'self'
     assert state['last_manager_body']['employee_id'] is None
     assert 'employee-search' not in state['calls']
+
+
+@pytest.mark.parametrize('platform', ['web', 'mobile'])
+@pytest.mark.parametrize('file_format', [None, 'pdf'])
+def test_self_only_employee_export_denial_keeps_name_followup_on_attendance(backend, platform, file_format):
+    client, state = backend
+    create = enable(client, state, [request(action='export_attendance', employee_name='Anirban Singh',
+        start_date='2026-10-01', end_date='2026-10-31', format=file_format, report_type='monthly_details')])
+    state.update(scopes=['self'], search_matches=[])
+    first = client.post('/v1/chat', headers=headers(), json={
+        'message': 'Export attendance of Anirban Singh of October month' + (' as PDF' if file_format else ''),
+        'client_platform': platform})
+    assert first.status_code == 200
+    assert 'only your own records' in first.json()['data']['reply']
+    assert 'full name or employee ID' not in first.json()['data']['reply']
+    second = client.post('/v1/chat', headers=headers(), json={'message': 'Anirban Singh',
+        'conversation_id': first.json()['data']['conversation_id'], 'client_platform': platform})
+    assert second.status_code == 200
+    assert 'only your own records' in second.json()['data']['reply']
+    assert second.json()['data']['artifacts'] == []
+    assert not {'attendance', 'export', 'leave-balance', 'manager-report'}.intersection(state['calls'])
+    assert create.await_count == 1
+    with client.app.state.store.connect() as database:
+        saved = database.execute('SELECT query_context FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT 1',
+            (first.json()['data']['conversation_id'],)).fetchone()
+    context = json.loads(saved['query_context'])
+    assert context['selection']['action'] == 'export_attendance'
+    assert context['selection']['start_date'] == '2026-10-01'
+    assert context['selection']['format'] == file_format
+
+
+def test_self_only_employee_id_is_denied_before_report_read(backend):
+    client, state = backend
+    enable(client, state, [request(employee_name=None)])
+    state['scopes'] = ['self']
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'Show employee ID 602 late last month'})
+    assert response.status_code == 200
+    assert 'only your own records' in response.json()['data']['reply']
+    assert not {'employee-search', 'manager-report'}.intersection(state['calls'])
+
+
+@pytest.mark.parametrize('platform', ['web', 'mobile'])
+def test_self_only_effort_history_denies_both_short_and_full_names(backend, platform):
+    client, state = backend
+    create = enable(client, state, [request(action='booked_time', employee_name=name,
+        start_date=None, end_date=None, period_kind='none') for name in ('Anirban', 'Anirban Singh')])
+    state.update(scopes=['self'], search_matches=[])
+    conversation_id = None
+    for name in ('Anirban', 'Anirban Singh'):
+        response = client.post('/v1/chat', headers=headers(), json={
+            'message': f'Can you tell me {name} Effort history?',
+            'conversation_id': conversation_id, 'client_platform': platform})
+        assert response.status_code == 200
+        data = response.json()['data']
+        assert 'only your own records' in data['reply']
+        assert 'full name or employee ID' not in data['reply']
+        assert data['artifacts'] == []
+        conversation_id = data['conversation_id']
+    assert 'manager-report' not in state['calls']
+    assert create.await_count == 2
+
+
+def test_self_only_own_name_remains_available(backend):
+    client, state = backend
+    enable(client, state, [request(action='attendance', end_date='2026-09-01', period_kind='day')])
+    state['scopes'] = ['self']
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'Show Joydeep Ghosh attendance for 2026-09-01'})
+    assert response.status_code == 200
+    assert state['last_attendance_body']['scope'] == 'self'
+    assert state['last_attendance_body']['employee_id'] == 101
+
+
+@pytest.mark.parametrize('scope', ['team', 'company'])
+def test_authorized_name_clarification_keeps_report_period_and_format(backend, scope):
+    client, state = backend
+    create = enable(client, state, [request(action='export_attendance', employee_name='Joydeep',
+        format='pdf', report_type='monthly_details')])
+    state.update(scopes=['self', scope], search_matches=[])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Export Joydeep attendance for September as PDF'})
+    assert first.status_code == 200
+    state['search_matches'] = [{'employee_id': 101, 'name': 'Joydeep Ghosh'}]
+    second = client.post('/v1/chat', headers=headers(), json={'message': 'Joydeep Ghosh',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert second.status_code == 200, second.text
+    assert second.json()['data']['artifacts']
+    assert state['last_export_body']['scope'] == scope
+    assert state['last_export_body']['employee_id'] == 101
+    assert state['last_export_body']['month'] == '2026-09'
+    assert state['last_export_body']['format'] == 'pdf'
+    assert create.await_count == 1
+
+
+def test_new_question_after_employee_denial_can_change_report(backend):
+    client, state = backend
+    create = enable(client, state, [request(employee_name='Anirban Singh'),
+        request(action='attendance', subject='self', employee_name=None, end_date='2026-09-01', period_kind='day')])
+    state.update(scopes=['self'], search_matches=[])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Show Anirban Singh late last month'})
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'Show my attendance for 2026-09-01',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert response.status_code == 200
+    assert state['last_attendance_body']['scope'] == 'self'
+    assert state['last_attendance_body']['employee_id'] is None
+    assert create.await_count == 2
+
+
+@pytest.mark.parametrize('platform', ['web', 'mobile'])
+@pytest.mark.parametrize('action', ['booked_time', 'effort_by_employee', 'late_punchin'])
+def test_period_clarification_retains_verified_employee_and_report_without_model(backend, platform, action):
+    from app.manager_query import report_period
+    client, state = backend
+    create = enable(client, state, [request(action=action, start_date=None, end_date=None, period_kind='none')])
+    first = client.post('/v1/chat', headers=headers(), json={
+        'message': 'Can you tell me Joydeep Ghosh Effort history?', 'client_platform': platform})
+    assert first.status_code == 200
+    assert 'Which date or period' in first.json()['data']['reply']
+    assert 'manager-report' not in state['calls']
+    second = client.post('/v1/chat', headers=headers(), json={'message': 'For Last month',
+        'conversation_id': first.json()['data']['conversation_id'], 'client_platform': platform})
+    assert second.status_code == 200, second.text
+    start, end = report_period('last month')
+    assert state['last_manager_body']['employee_id'] == 101
+    assert state['last_manager_body']['scope'] == 'company'
+    assert state['last_manager_body']['report'] == action
+    assert state['last_manager_body']['start_date'] == start
+    assert state['last_manager_body']['end_date'] == end
+    assert create.await_count == 1
+    assert state['calls'].count('employee-search') == 1
+
+
+@pytest.mark.parametrize('period,expected', [
+    ('For 2026-09', ('2026-09-01', '2026-09-30')),
+    ('September 2026', ('2026-09-01', '2026-09-30')),
+    ('Sep 2026', ('2026-09-01', '2026-09-30')),
+    ('On 2026-09-08', ('2026-09-08', '2026-09-08')),
+    ('For 08/09/2026', ('2026-09-08', '2026-09-08')),
+    ('From 2026-09-01 to 2026-09-10', ('2026-09-01', '2026-09-10')),
+])
+def test_period_only_replies_keep_named_employee(period, expected, backend):
+    client, state = backend
+    create = enable(client, state, [request(action='booked_time', start_date=None, end_date=None, period_kind='none')])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Show Joydeep booked effort'})
+    response = client.post('/v1/chat', headers=headers(), json={'message': period,
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert response.status_code == 200, response.text
+    assert state['last_manager_body']['employee_id'] == 101
+    assert (state['last_manager_body']['start_date'], state['last_manager_body']['end_date']) == expected
+    assert create.await_count == 1
+
+
+def test_invalid_period_keeps_employee_for_next_clarification(backend):
+    client, state = backend
+    create = enable(client, state, [request(action='booked_time', start_date=None, end_date=None, period_kind='none')])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Show Joydeep booked effort'}).json()['data']
+    invalid = client.post('/v1/chat', headers=headers(), json={'message': '2026-02-31',
+        'conversation_id': first['conversation_id']})
+    assert invalid.status_code == 200
+    assert 'valid period' in invalid.json()['data']['reply']
+    assert 'manager-report' not in state['calls']
+    corrected = client.post('/v1/chat', headers=headers(), json={'message': 'For 2026-09',
+        'conversation_id': first['conversation_id']})
+    assert corrected.status_code == 200
+    assert state['last_manager_body']['employee_id'] == 101
+    assert create.await_count == 1
+
+
+def test_period_clarification_keeps_export_format(backend):
+    client, state = backend
+    create = enable(client, state, [request(action='export_attendance', start_date=None, end_date=None,
+        period_kind='none', format='pdf')])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Export Joydeep attendance as PDF'})
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'For September 2026',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert response.status_code == 200, response.text
+    assert response.json()['data']['artifacts']
+    assert state['last_export_body']['employee_id'] == 101
+    assert state['last_export_body']['month'] == '2026-09'
+    assert state['last_export_body']['format'] == 'pdf'
+    assert create.await_count == 1
+
+
+def test_same_employee_subject_followup_retains_verified_id(backend):
+    client, state = backend
+    create = enable(client, state, [request(action='booked_time', start_date=None, end_date=None, period_kind='none'),
+        request(action='booked_time', employee_name=None, use_previous=True)])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Show Joydeep booked effort'})
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'I need the September 2026 figures please',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert response.status_code == 200, response.text
+    assert state['last_manager_body']['employee_id'] == 101
+    assert state['calls'].count('employee-search') == 1
+    assert create.await_count == 2
+
+
+def test_period_reply_retains_project_selection(backend):
+    client, state = backend
+    create = enable(client, state, [request(action='project_tasks', subject='company', employee_name=None,
+        project_name='IIHM', start_date=None, end_date=None, period_kind='none')])
+    state['task_scopes'] = ['company']
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Show IIHM project tasks'})
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'For September 2026',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert response.status_code == 200, response.text
+    assert state['last_task_body']['project_id'] == 7
+    assert state['last_task_body']['start_date'] == '2026-09-01'
+    assert state['last_task_body']['end_date'] == '2026-09-30'
+    assert create.await_count == 1
+
+
+def test_period_reply_does_not_reuse_selection_after_permission_change(backend):
+    client, state = backend
+    create = enable(client, state, [request(action='booked_time', start_date=None, end_date=None, period_kind='none')])
+    first = client.post('/v1/chat', headers=headers(), json={'message': 'Show Joydeep booked effort'})
+    state['policy'] = 'b' * 64
+    response = client.post('/v1/chat', headers=headers(), json={'message': 'For last month',
+        'conversation_id': first.json()['data']['conversation_id']})
+    assert response.status_code == 409
+    assert 'manager-report' not in state['calls']
+    assert create.await_count == 1
 
 
 def test_schema_requires_all_fields():

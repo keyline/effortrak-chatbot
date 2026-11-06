@@ -113,9 +113,17 @@ class ManagerReportArgs(EmployeeCountArgs):
     start_date: date | None = None
     end_date: date | None = None
     threshold: int = Field(default=0, ge=0, le=100000)
+    punch_basis: Literal['late_cutoff', 'shift_start', 'fixed_time'] = 'late_cutoff'
+    punch_after: str | None = Field(default=None, pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$')
+    min_delay_minutes: int = Field(default=0, ge=0, le=1440)
 
     @model_validator(mode='after')
     def valid_period(self):
+        if self.report != 'late_punchin' and (self.punch_basis != 'late_cutoff' or self.punch_after is not None or self.min_delay_minutes):
+            raise ValueError('Punch-time filters apply to punch-in reports only.')
+        if (self.punch_basis == 'fixed_time' and (self.punch_after is None or self.min_delay_minutes)
+                or self.punch_basis != 'fixed_time' and self.punch_after is not None):
+            raise ValueError('Specify a fixed clock time or a shift-relative delay, not both.')
         if self.project_id is not None and self.report != 'booked_time':
             raise ValueError('Project filters are supported for booked effort only.')
         if self.report == 'work_arrangements':

@@ -38,15 +38,48 @@ def make_chart(kind, title, unit, labels, series, note, subtitle=''):
     return ReportChart(type=kind, title=title, unit=unit, labels=labels, series=series, note=note, subtitle=subtitle).model_dump()
 
 
-async def build_report_chart(service, identity, selected):
+async def build_report_chart(service, identity, selected, *, chart_types=None):
     start, end = date.fromisoformat(selected['start_date']), date.fromisoformat(selected['end_date'])
-    if not 0 <= (end - start).days <= 30:
-        return 'Please select a chart period of up to 31 days.', [], []
     metric = selected.get('chart_metric')
+    maximum = 92 if metric == 'punch_in_days' else 30
+    if not 0 <= (end - start).days <= maximum:
+        return f'Please select a chart period of up to {maximum + 1} days.', [], []
     kind = selected.get('chart_type') or 'auto'
     scope = selected['scope']
     common = {'scope': scope, 'employee_id': selected.get('employee_id')}
     period = f'{start} to {end}' if start != end else str(start)
+    if metric == 'punch_in_days':
+        data = await service.backend.manager_report(identity, ManagerReportArgs(
+            **common, report='late_punchin', start_date=start, end_date=end,
+            threshold=selected.get('threshold') or 0,
+            punch_basis=selected.get('punch_basis') or 'late_cutoff',
+            punch_after=selected.get('punch_after'), min_delay_minutes=selected.get('min_delay_minutes') or 0))
+        text, used, rows = render_report(data), ['get_manager_report'], data['rows']
+        if not rows or not any(row['count'] for row in rows):
+            return text + '\nNo matching punch-in days are available to chart.', [], used
+        if data['details_truncated'] or data['matched_count'] != len(rows) or len(rows) > 50:
+            return text + '\nPlease narrow the selection; punch-in charts require a complete report of at most 50 employees.', [], used
+        labels = [f"{row['employee_name'][:225]} (#{row['employee_id']})" for row in rows]
+        values = [None if row.get('assessable') is False else row['count'] for row in rows]
+        unassessed = data.get('unassessed_days', sum(row.get('unassessed_days', 0) for row in rows))
+        note = ('Matching first daily punch-ins under the report filters. Each employee/date counts once. '
+                'Slices represent shares of matching punch-in days, not late versus on-time attendance. '
+                'The report time filter, reference-time quality and coverage notes still apply.')
+        if unassessed:
+            note += f' {unassessed} punch-in days could not be assessed and are excluded, not counted as on-time.'
+        charts = []
+        for style in chart_types or [kind]:
+            style = 'bar' if style == 'auto' else style
+            if style == 'line':
+                style = 'bar'
+                text += '\nA bar chart is used because these values compare employees, not dates.'
+            if style in ('pie', 'doughnut') and any(value is None for value in values):
+                text += '\nThe requested pie chart is unavailable because some employee counts could not be assessed. The report is retained.'
+                continue
+            charts.append(make_chart(style, f'Matching punch-in days by employee - {period}',
+                'employee-days', labels, [{'name': 'Matching punch-in days', 'values': values}], note,
+                f"{scope.capitalize()} | {sum(value for value in values if value is not None)} matching punch-in days"))
+        return text, charts, used
     if metric == 'booked_effort':
         data = await service.backend.manager_report(identity, ManagerReportArgs(
             **common, report='booked_time', start_date=start, end_date=end,

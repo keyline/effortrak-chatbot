@@ -254,6 +254,138 @@ Daily task details include booked time from linked timesheet entries when availa
 from planned time. Missing bookings are not treated as recorded zeroes; daily totals cover
 available linked entries across all pages. Links are checked against both company and employee.
 
+### Conversation Context
+
+The server stores the active report selection and its missing fields in private
+`query_context` metadata. Names, dates, employee/project IDs, scope, pagination and
+export format are retained across clarification replies. Recognized short replies
+are handled locally; pronoun-based follow-ups retain the selected subject even if
+the model omits its follow-up flag. Explicit scope changes clear the old employee
+filter. Every resulting read/export still checks current backend permissions.
+
+`Thank you` preserves the active report and its export snapshot. A new independent
+question starts a new selection; missing context does not restore an older person
+silently. This is active-request memory, not unrestricted recall of every person
+mentioned earlier. Ambiguous requests still require clarification.
+
+Run `python -m pytest tests/test_conversation_memory.py` for chained employee/date,
+format, pagination, scope, project, pronoun and cross-module regression scenarios.
+When deploying this change, update `app/semantic_query.py`, `app/task_report.py`,
+`app/chat_service.py`, `app/report_export.py`, `app/visit_query.py` and `app/leave_balance_query.py` together,
+then restart the AI worker. No manual database migration or client rebuild is needed.
+Start a new chat for conversations whose earlier selections were already lost.
+
+### Question Interpretation And Clarification
+
+`app/question_policy.py` defines the interpreter's capability boundaries and reviewed
+clarification messages. It distinguishes attendance hours, actual timesheet bookings,
+planned task time, tracked productive/idle time, remaining leave and approved leave.
+The model can return a constrained `clarification_kind` instead of guessing. Any non-null
+ambiguity signal is handled before employee lookup or report execution, even if the
+model also selected a read action. Clear metric choices preserve the supplied employee
+and period, then use the same existing backend authorization and report implementations.
+
+Empty/non-report contexts no longer create an implicit attendance selection. Pending
+employee/visit-name handlers avoid common report/question phrases; vague work-arrangement
+questions are not automatically interpreted as GPS lookups. Existing local help, visits
+and exports remain separate handlers; this is an incremental change, not a full router rewrite.
+
+The `app.semantic_query` logger records route source, action, clarification category and
+follow-up flag at INFO level when application logging enables it. It does not log question
+text, names, report data or credentials. No new database storage is introduced.
+
+Run `python -m pytest tests/test_question_policy.py` for mocked semantic-contract and
+permission regressions. These tests exercise routing, not a measured accuracy benchmark
+against a live model. Capability instructions improve guidance but cannot guarantee every
+paraphrase; ambiguous requests should clarify. The added instructions modestly increase
+input tokens for existing semantic calls; no second AI call or new model is introduced.
+
+Deploy `app/question_policy.py`, `app/semantic_query.py`, `app/visit_query.py` and `app/leave_balance_query.py` together
+and restart the AI worker. Include any not-yet-deployed conversation/product-help files
+listed in their sections as well. No API response-format change, database migration,
+web update or mobile rebuild is required.
+
+### Product Introduction
+
+Questions such as `What is Effortrak?` and `Tell me about Effortrak` use the reviewed
+introduction in `app/product_help.py`, without a model call or report lookup.
+When semantic questions are enabled, the existing AI interpreter can also classify
+less direct wording as `product_overview`; the answer still comes from the reviewed
+text, not generated feature or subscription claims. Normal interpreter token charges apply.
+Product answers clear the active report selection and are not exportable reports.
+Deploy `app/product_help.py`, `app/chat_service.py` and `app/semantic_query.py` together
+and restart the AI worker. Both web and mobile use this handler; no database migration
+or client rebuild is required. Run `python -m pytest tests/test_product_help.py` to verify.
+
+### Punch-In Time Filters
+
+With semantic questions enabled, punch-in reports support a fixed clock cutoff, shift
+start, or the configured late cutoff. Examples:
+
+- `List employees who punched in after 11 AM last month.`
+- `Show employees who punched in after shift start on 15/10/2026.`
+- `Show employees more than 20 minutes after their shift start last month.`
+- `Export employees late on 20 September 2026 in Excel with a pie chart.`
+- `Export this month's after-shift punch-ins as PDF with pie and bar charts.`
+
+`punch_basis` is `fixed_time`, `shift_start`, or `late_cutoff`; `punch_after` is an
+HH:MM:SS clock time for fixed-time requests; `min_delay_minutes` is a strict delay
+relative to shift start/late cutoff. The existing `threshold` remains an occurrence
+count, never minutes. Comparisons include seconds: exactly 11:00:00 does not match
+after 11 AM, and exactly 20 minutes does not match more than 20 minutes. Overnight
+shifts are anchored across midnight; fixed clock cutoffs remain clock comparisons.
+Only the first active recorded punch per employee/day is assessed. Calendar and
+payroll statuses are not modified. Existing 93-day and authorized-employee limits apply.
+
+The backend prefers per-day shift settings in `attendance_transaction` when captured
+context exists. Reconstructed snapshots are labelled `reconstructed_snapshot`;
+missing snapshots use `current_configuration` and are explicitly estimates, not
+verified historical assignments. Valid saved snapshots are labelled `saved_snapshot`.
+Days without valid comparison times are unassessed, not silently counted as on time.
+No new table/column is needed; deployments without the existing snapshot table use
+the labelled current-setting fallback. Fixed-time comparisons do not depend on shift policy.
+
+Filtered reports and PDF/XLSX exports use the same backend arguments. Requested pie
+and bar charts summarize matching employee-days per employee; they do not claim to
+show all company employees or the proportion of late versus on-time employees.
+Both chart types can be included in one file. Unsuitable/empty pie data is omitted
+with an explanation while preserving the tables. Export and download reauthorize
+the original selection, and changed data/access requires displaying the report again.
+
+In-chat punch-in reports also support explicitly requested pie/bar charts (including
+both together). Ordinary requests and period-only follow-ups remain report-only.
+Style follow-ups retain the report's employee scope, period, occurrence threshold
+and punch-time filters. Chart values come from the same authorized manager report;
+no employee values are sent to the question interpreter. In-chat charts require a
+complete selection of at most 50 employees and up to 93 days. Empty results have no
+chart; unknown counts are never converted to zero. Existing web/mobile chart renderers
+are reused. Deploy AI-service `app/semantic_query.py` and `app/report_charts.py`
+together and restart the worker; no client or database update is required for this addition.
+
+Punch-in Excel exports open on an employee-summary `Report` sheet. `Punch-in Records`
+contains every returned date-wise record in one filterable Excel table, with native
+dates, clock times and sortable duration values. `Notes` preserves filters, source-quality
+and coverage explanations; requested chart sheets remain available. Original source
+tables and reply text are retained in hidden technical sheets, not removed or used as
+an access-control mechanism. The default view hides redundant reference times,
+employee IDs and source metadata; estimated/unspecified sources and unassessed-day
+counts stay visible when relevant. Delays use hours:minutes:seconds.
+Punch-in PDFs contain a short summary, one date-wise table with repeated page
+headers, requested charts side by side, and report notes. They do not repeat the
+chat answer or technical source tables. Other report types keep their existing layout.
+For this PDF/Excel presentation update, deploy `app/punch_workbook.py`,
+`app/punch_pdf.py` and `app/report_export.py` together and restart the AI worker. Generate a new export;
+previously downloaded or stored report files are not rewritten. No client or database
+change is needed. Run `python -m pytest tests/test_punch_workbook.py tests/test_report_export.py tests/test_punch_time.py`.
+
+Deploy the backend first: `app/Controllers/Api/AiController.php`,
+`app/Services/Ai/AiManagerReportService.php`, and the new
+`app/Services/Ai/AiPunchTimeReport.php`. Then deploy AI-service `app/schemas.py`,
+`app/semantic_query.py`, `app/backend_client.py`, `app/manager_query.py`, and
+`app/report_export.py` together and restart the worker. Include any not-yet-deployed
+dependencies from earlier sections. No mobile rebuild, web UI update or new database
+migration is needed. New filters fail closed if the backend cannot echo the exact filter.
+
 ### Shared Report Exports
 
 Display a report, then ask `Give me this report in Excel format` or `Make that a PDF`.

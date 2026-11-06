@@ -204,7 +204,9 @@ def test_forbidden_chart_scope_never_calls_report_tool(backend):
         chart_type='pie', chart_metric='attendance_breakdown')])
     state['scopes'] = ['self']
     response = client.post('/v1/chat', headers=headers(), json={'message': 'Company attendance chart'})
-    assert response.status_code == 403 and 'attendance' not in state['calls']
+    assert response.status_code == 200 and 'attendance' not in state['calls']
+    assert 'only your own records' in response.json()['data']['reply']
+    assert not response.json()['data']['charts']
 
 
 def test_chart_schema_rejects_nonfinite_negative_and_mismatched_values():

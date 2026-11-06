@@ -365,6 +365,11 @@ class BackendClient:
         ids, rows = data.get('employee_ids'), data.get('rows')
         start = args.start_date.isoformat() if args.start_date else None
         end = args.end_date.isoformat() if args.end_date else None
+        if args.report == 'late_punchin':
+            expected = dict(punch_basis=args.punch_basis, punch_after=args.punch_after, min_delay_minutes=args.min_delay_minutes)
+            if (data.get('punch_filter') is not None and data['punch_filter'] != expected
+                    or data.get('punch_filter') is None and (args.punch_basis != 'late_cutoff' or args.min_delay_minutes)):
+                raise HTTPException(502, 'Backend punch-time filters are unavailable or inconsistent. Update the web backend and retry.')
         if (data.get('data_source') != 'effortrak_backend' or data.get('scope') != args.scope
                 or data.get('report') != args.report or data.get('start_date') != start or data.get('end_date') != end
                 or not isinstance(ids, list) or len(ids) > 50 or any(type(value) is not int or value <= 0 for value in ids)
@@ -402,10 +407,25 @@ class BackendClient:
                     raise HTTPException(502, 'Invalid backend late punch-in report.')
                 days = []
                 for entry in entries:
+                    seconds = entry.get('delay_seconds') if isinstance(entry, dict) else None
                     if (not isinstance(entry, dict) or not isinstance(entry.get('date'), str)
+                            or data.get('punch_filter') is not None and seconds is None
                             or not start <= entry['date'] <= end or not isinstance(entry.get('punch_in'), str)
-                            or type(entry.get('late_minutes')) is not int or entry['late_minutes'] <= 0):
+                            or type(entry.get('late_minutes')) is not int
+                            or (seconds is None and entry['late_minutes'] <= 0)
+                            or (seconds is not None and (type(seconds) is not int or not args.min_delay_minutes * 60 < seconds < 86400
+                                or entry['late_minutes'] != seconds // 60
+                                or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d', str(entry.get('cutoff', '')))
+                                or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d', entry['punch_in'])
+                                or args.punch_basis == 'fixed_time' and entry['cutoff'] != args.punch_after
+                                or entry.get('policy_source') not in ('saved_snapshot', 'reconstructed_snapshot', 'current_configuration', 'fixed_time')))):
                         raise HTTPException(502, 'Invalid backend late punch-in entry.')
+                    if seconds is not None:
+                        punch_seconds = sum(int(value) * weight for value, weight in zip(entry['punch_in'].split(':'), (3600, 60, 1)))
+                        cutoff_seconds = sum(int(value) * weight for value, weight in zip(entry['cutoff'].split(':'), (3600, 60, 1)))
+                        difference = punch_seconds - cutoff_seconds
+                        if (difference if args.punch_basis == 'fixed_time' else difference % 86400) != seconds:
+                            raise HTTPException(502, 'Inconsistent backend punch-in delay.')
                     days.append(entry['date'])
                 if len(set(days)) != len(days):
                     raise HTTPException(502, 'Duplicate backend late punch-in dates.')

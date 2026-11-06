@@ -73,6 +73,9 @@ def requested_filter(text, default='positive'):
 
 def parse_question(message):
     text = re.sub(r'\s+', ' ', message.strip()).lower()
+    if (re.search(r'\b(?:and|also|plus|as\s+well\s+as)\b', text)
+            and re.search(r'\b(?:attendance|punch|timesheets?|tasks?|booked\s+effort|client\s+visits?|headcount|employee\s+count)\b', text)):
+        return None
     if not re.search(r'\b(?:leave|leaves|pto)\b', text):
         return None
     if re.search(r'\b(?:add|edit|delete|adjust|approve|reject|allocate|increase|reduce|how\s+(?:to|do|can))\b', text):
@@ -126,7 +129,7 @@ async def balance_report(identity, backend, selected):
     try:
         args = LeaveBalanceArgs.model_validate(selected)
     except ValidationError:
-        return local_reply('Please choose a financial year, a full leave-type name, and a top count between 1 and 50.')
+        return local_reply('Please choose a financial year, a full leave-type name, and a top count between 1 and 50.', selected)
     if args.scope not in identity.scopes:
         raise HTTPException(403, 'You do not have permission for the requested employee scope.')
     data = await backend.call('leave-balance', identity.credential, args.model_dump())
@@ -167,26 +170,35 @@ async def balance_report(identity, backend, selected):
             lines.append(f'Unlimited entitlement: {group.unlimited_count} employee(s), excluded from numeric ranking.')
     lines.extend(['', result.notice])
     reply, _, _ = local_reply('\n'.join(lines), args.model_dump())
+    reply.query_context['leave_types'] = [group.leave_type for group in result.groups]
     return reply, ['get_leave_balance_ranking'], []
 
 
 async def leave_balance_reply(message, context, identity, backend):
     parsed = parse_question(message)
     if parsed is None and context.get('kind') == 'leave_balance' and context.get('args'):
+        type_text = re.sub(r'^\s*(?:for|only)\s+', '', message, flags=re.I).strip(' .!?')
+        leave_type = next((value for value in context.get('leave_types', []) if value.casefold() == type_text.casefold()), None)
+        if leave_type is None and re.fullmatch(r'[^\W\d_]+(?:[ -][^\W\d_]+)*\s+leave', type_text, re.I):
+            leave_type = type_text
         top = re.fullmatch(r'\s*(?:show\s+)?(?:the\s+)?top\s+(\d+)(?:\s+(?:instead|please))?\s*[.!?]?\s*', message, re.I)
         year = re.fullmatch(r'\s*(?:for\s+)?(20\d{2}(?:-\d{2}(?:\d{2})?)?)\s*[.!?]?\s*', message)
         filter_followup = re.fullmatch(r'\s*(?:(?:show|include|only|me|the|with|balances?|remaining|instead|please|also|and|all|recorded|zero|0|negative|positive)\s*)+[.!?]?\s*', message, re.I)
         direction = re.fullmatch(r'\s*(?:(?:show|me|the|same|but|sort|by|order|instead|please|first)\s+)*(lowest|highest|ascending|descending)(?:\s+(?:instead|first|order|please))*\s*[.!?]?\s*', message, re.I)
-        if top or year or filter_followup or direction:
+        if top or year or filter_followup or direction or leave_type:
             parsed = dict(context['args'])
             if top: parsed['limit'] = int(top[1])
             elif year: parsed['financial_year'] = year[1]
             elif direction:
                 parsed['ranking'] = 'lowest' if direction[1].lower() in ('lowest', 'ascending') else 'highest'
                 parsed['balance_filter'] = 'nonnegative' if parsed['ranking'] == 'lowest' else 'positive'
+            elif leave_type: parsed['leave_type'] = leave_type
             else: parsed['balance_filter'] = requested_filter(message.lower().strip(' .!?') + ' balances')
     if parsed is None:
         return None
     if 'error' in parsed:
-        return local_reply(parsed['error'])
+        previous = context.get('args') if context.get('kind') == 'leave_balance' else None
+        result = local_reply(parsed['error'], previous)
+        result[0].query_context['leave_types'] = context.get('leave_types', []) if previous else []
+        return result
     return await balance_report(identity, backend, parsed)

@@ -145,7 +145,42 @@ def report_period(message):
     return period(message)
 
 
+def punch_time_report(data, include_names):
+    selected = data['punch_filter']
+    basis = selected['punch_basis']
+    label = ('clock time ' + selected['punch_after'] if basis == 'fixed_time' else
+             'each day\'s shift start' if basis == 'shift_start' else 'each day\'s configured late cutoff')
+    delay = selected['min_delay_minutes']
+    lines = [f"Punch-in time report | {data['start_date']} to {data['end_date']}",
+             f"Filter: more than {delay} minute(s) after {label}." if delay else f'Filter: strictly after {label}.']
+    matches = [row for row in data['rows'] if row['count'] > 0]
+    lines.append(f"Matching employees: {len(matches)} | Matching punch-in days: {sum(row['count'] for row in matches)}.")
+    if not matches:
+        lines.append('No matching punch-in records were found within your access permissions.')
+    if include_names:
+        for row in data['rows']:
+            lines.append(f"{row['employee_name']}: {row['count']} matching day(s).")
+            for entry in row['entries']:
+                seconds = entry['delay_seconds']
+                elapsed = f'{seconds // 60}m {seconds % 60}s'
+                source = entry['policy_source'].replace('_', ' ')
+                lines.append(f"{entry['date']} | Punch-in: {entry['punch_in']} | Reference: {entry['cutoff']} | Delay: {elapsed} | Policy: {source}.")
+            if row.get('unassessed_days'):
+                lines.append(f"Unassessed punch-in days: {row['unassessed_days']}.")
+    lines.append(data['notice'])
+    if data['details_truncated']:
+        lines.append(f"Showing {len(data['rows'])} of {data['matched_count']} employee rows. Narrow the selection for a complete report.")
+    return '\n'.join(lines)
+
+
 def render_report(data, *, include_names=True):
+    if data.get('report') == 'late_punchin' and data.get('punch_filter'):
+        selected = data['punch_filter']
+        legacy = (selected['punch_basis'] == 'late_cutoff' and selected['min_delay_minutes'] == 0 and not data.get('unassessed_days')
+            and all(not row['assessable'] or re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d', row['late_after']) for row in data['rows'])
+            and all(entry['delay_seconds'] % 60 == 0 for row in data['rows'] for entry in row['entries']))
+        if not legacy:
+            return punch_time_report(data, include_names)
     title = TITLES[data['report']]
     dates = f"{data['start_date']} to {data['end_date']}" if data['start_date'] else 'current configuration'
     lines = [f'{title} | {dates}']

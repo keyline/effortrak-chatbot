@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.auth import Identity
 from app.employee_lookup import named_attendance, named_tasks, model_query_context
-from app.task_report import AssistantReply, trusted_query
+from app.task_report import AssistantReply, trusted_query, is_acknowledgement
 from app.attendance_report import MONTHLY_OVERVIEW, format_monthly_report, format_daily_report
 from app.config import Settings
 from app.schemas import AttendanceArgs, ExportArgs, EmployeeCountArgs, DailyAttendanceArgs, DailyTaskArgs, TaskSummaryArgs, WorkReportArgs
@@ -27,6 +27,7 @@ from app.token_usage import TokenMeter
 from app.work_report import wants_review
 from app.report_charts import CHART_REQUEST, restyle, chart_reply
 from app.website_help import website_help
+from app.product_help import product_help
 
 
 INSTRUCTIONS = '''You are the Effortrak employee-report assistant.
@@ -152,6 +153,11 @@ class ChatService:
 
     async def _reply(self, message: str, history: list[dict], identity: Identity, *, client_platform='web') -> tuple[str, list[str], list[dict]]:
         context = trusted_query(history)
+        product_result = product_help(message, context)
+        if product_result is not None:
+            return product_result
+        if self.backend and is_acknowledgement(message):
+            return AssistantReply('You are welcome.', model_content='The user acknowledged the answer.', query_context=context), [], []
         if self.backend:
             balance_result = await leave_balance_reply(message, context, identity, self.backend)
             if balance_result is not None:

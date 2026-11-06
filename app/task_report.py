@@ -1,4 +1,6 @@
 import json
+import re
+import calendar
 from dataclasses import dataclass
 
 from app.attendance_report import duration
@@ -23,14 +25,29 @@ class TaskResult:
 
 def trusted_query(history: list[dict]) -> dict:
     for row in reversed(history):
-        if row['role'] != 'assistant' or not row.get('query_context'):
+        if row['role'] != 'assistant':
             continue
         try:
-            context = json.loads(row['query_context'])
+            context = json.loads(row.get('query_context') or '{}')
         except (TypeError, ValueError):
             return {}
         return context if isinstance(context, dict) else {}
     return {}
+
+
+def is_acknowledgement(message):
+    return bool(re.fullmatch(r'\s*(?:thanks(?:\s+a\s+lot)?|thank\s+you(?:\s+very\s+much)?)(?:[.!]+)?\s*', message, re.I))
+
+
+def period_fragment(message):
+    words = set(re.findall(r'[a-z]+', message.lower()))
+    allowed = {'for', 'on', 'in', 'during', 'from', 'to', 'until', 'through', 'between', 'and',
+        'the', 'last', 'past', 'previous', 'current', 'this', 'next', 'day', 'days', 'week', 'weeks',
+        'month', 'months', 'year', 'years', 'today', 'yesterday', 'tomorrow', 'please',
+        'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'thirty', 'what', 'how', 'about'}
+    allowed.update(name.lower() for name in (*calendar.month_name, *calendar.month_abbr) if name)
+    return bool(words.issubset(allowed) and (re.search(r'\d', message)
+        or words.intersection({'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years', 'today', 'yesterday', 'tomorrow'})))
 
 
 def task_result(data: dict, *, daily: bool) -> TaskResult:

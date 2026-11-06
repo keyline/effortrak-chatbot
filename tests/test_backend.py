@@ -135,6 +135,8 @@ def backend(tmp_path):
                         notice='Verified local report.')
             if body.get('project_id'):
                 data.update(project_id=state.get('returned_effort_project_id', body['project_id']), project_name='IIHM')
+            if body['report'] == 'late_punchin' and state.get('punch_filter_echo'):
+                data['punch_filter'] = {key: body[key] for key in ('punch_basis', 'punch_after', 'min_delay_minutes')}
             if body['report'] in ('present', 'absent') and body['start_date'] == body['end_date']:
                 data['attendance_coverage'] = state.get('attendance_coverage', dict(employee_count=1,
                     unclassified_employee_count=0, punch_in_employee_count=1))

@@ -25,7 +25,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle
 
-from app.task_report import AssistantReply
+from app.task_report import AssistantReply, is_acknowledgement
 
 
 READ_ENDPOINTS = frozenset({'attendance', 'daily-tasks', 'task-summary',
@@ -34,7 +34,39 @@ READ_ENDPOINTS = frozenset({'attendance', 'daily-tasks', 'task-summary',
 capture_sources = ContextVar('report_export_sources', default=None)
 defer_export = ContextVar('report_export_deferred', default=False)
 FILE_REQUEST = re.compile(r'\b(?:pdf|xlsx|excel|export|download)\b', re.I)
-GENERIC = frozenset('i want need like can could would you please kindly provide generate share give send get make convert into version me this that the same current report chart it in as to format a an download export pdf excel xlsx file with include including and data table tables charts graph graphs'.split())
+GENERIC = frozenset('i want need like can could would you please kindly provide generate share give send get make convert into version me this that the same current report chart it in as to format a an download export pdf excel xlsx file with include including and data table tables charts graph graphs attach along pie pi pic circle bar column donut doughnut'.split())
+
+
+def requested_chart_styles(message):
+    kind = r'(?:pie|pi|pic|circle|bar|column|donut|doughnut)'
+    kinds = re.findall(r'\b(' + kind + r')\b(?=\s*(?:(?:and|or|,|/)\s*(?:a\s+)?' + kind + r'\s*)*(?:chart|graph)s?\b)', message, re.I)
+    return list(dict.fromkeys({'pi': 'pie', 'pic': 'pie', 'circle': 'pie', 'column': 'bar',
+        'donut': 'doughnut'}.get(kind.lower(), kind.lower()) for kind in kinds))
+
+
+def style_export(snapshot, styles):
+    if not styles:
+        return snapshot
+    result = copy.deepcopy(snapshot)
+    charts = []
+    omitted = False
+    for chart in result['charts']:
+        for kind in styles:
+            selected = {**copy.deepcopy(chart), 'type': kind}
+            series = selected['series']
+            if kind in ('pie', 'doughnut') and (len(series) != 1
+                    or any(value is None or value < 0 for value in series[0]['values'])
+                    or not any(value > 0 for value in series[0]['values'])):
+                omitted = True
+                continue
+            valid_chart(selected)
+            charts.append(selected)
+    result['charts'] = charts[:10]
+    if omitted or not charts:
+        result['text'] += '\nA requested chart could not be included: charts require suitable numeric data; pie charts require positive, complete parts of one measure. All returned report tables are retained.'
+    if len(charts) > 10:
+        result['text'] += '\nOnly the first 10 requested charts are included. All returned report tables are retained.'
+    return result
 
 
 def capture(endpoint, arguments, data):
@@ -121,7 +153,9 @@ def inferred_charts(sources):
             rows = data.get('rows', [])
             labels = [f"{row.get('employee_name', row.get('project_name', 'Record'))} (#{row.get('employee_id', row.get('project_id', ''))})" for row in rows]
             if data.get('report') in ('late', 'late_punchin', 'missing_punchout', 'present', 'absent'):
-                add(data['report'].replace('_', ' ').title(), 'recorded days', labels,
+                filtered = data.get('report') == 'late_punchin' and data.get('punch_filter')
+                add('Matching punch-in days by employee' if filtered else data['report'].replace('_', ' ').title(),
+                    'matching employee-days' if filtered else 'recorded days', labels,
                     [None if row.get('assessable') is False else row['count'] for row in rows])
             elif data.get('report') in ('effort_by_employee', 'effort_by_project', 'task_overruns', 'workload') and rows and len(rows) <= 50:
                 charts.append(dict(type='bar', title='Planned and booked time (separate measures)', unit='hours', labels=labels,
@@ -230,19 +264,24 @@ def valid_chart(chart):
 
 
 def workbook_bytes(snapshot, tables):
+    from app.punch_workbook import build_punch_workbook
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = 'Report'
-    sheet.append(['Effortrak - exported report'])
-    sheet.append(['Displayed result only. Page, scope and truncation notices remain applicable.'])
-    sheet.append(['Up to 10 charts are included when meaningful; all returned report data remains in the data sheets. Locations are not plotted as numeric measurements.'])
-    for line in snapshot['text'].splitlines():
-        sheet.append([safe_cell(line)])
-    sheet.column_dimensions['A'].width = 110
-    for row in sheet:
-        row[0].alignment = Alignment(wrap_text=True, vertical='top')
+    punch_report = build_punch_workbook(workbook, snapshot, safe_cell)
+    if not punch_report:
+        sheet.append(['Effortrak - exported report'])
+        sheet.append(['Displayed result only. Page, scope and truncation notices remain applicable.'])
+        sheet.append(['Up to 10 charts are included when meaningful; all returned report data remains in the data sheets. Locations are not plotted as numeric measurements.'])
+        for line in snapshot['text'].splitlines():
+            sheet.append([safe_cell(line)])
+        sheet.column_dimensions['A'].width = 110
+        for row in sheet:
+            row[0].alignment = Alignment(wrap_text=True, vertical='top')
     for index, (title, headers, rows) in enumerate(tables, 1):
         sheet = workbook.create_sheet(f'Data {index}')
+        if punch_report:
+            sheet.sheet_state = 'hidden'
         sheet.append([safe_cell(title)])
         sheet.append([safe_cell(header) for header in headers])
         for row in rows:
@@ -273,16 +312,20 @@ def workbook_bytes(snapshot, tables):
         graph.add_data(Reference(sheet, min_col=2, max_col=1 + len(chart['series']), min_row=2, max_row=2 + len(chart['labels'])), titles_from_data=True)
         graph.set_categories(Reference(sheet, min_col=1, min_row=3, max_row=2 + len(chart['labels'])))
         graph.display_blanks = 'gap'
-        graph.width, graph.height = 24, 13
+        graph.width, graph.height = (18, 10) if punch_report else (24, 13)
         if chart['type'] in ('bar', 'line'):
             graph.y_axis.title = chart.get('unit', '')
-        sheet.add_chart(graph, 'H2')
+        sheet.add_chart(graph, 'D2' if punch_report else 'H2')
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
 
 
 def pdf_bytes(snapshot, tables):
+    from app.punch_pdf import punch_pdf_bytes
+    punch_report = punch_pdf_bytes(snapshot, valid_chart)
+    if punch_report is not None:
+        return punch_report
     buffer = BytesIO()
     styles = getSampleStyleSheet()
     styles['BodyText'].fontSize = 8
@@ -344,10 +387,11 @@ def _pdf_table(headers, rows, paragraph):
     return table
 
 
-async def export_snapshot(snapshot, format, identity, backend, context):
+async def export_snapshot(snapshot, format, identity, backend, context, chart_styles=None):
     if format not in ('pdf', 'xlsx'):
         raise HTTPException(422, 'Choose PDF or Excel (XLSX).')
     await authorize(snapshot, identity, backend)
+    snapshot = style_export(snapshot, chart_styles)
     tables = data_tables(snapshot)
     payload = pdf_bytes(snapshot, tables) if format == 'pdf' else workbook_bytes(snapshot, tables)
     if len(payload) > 8 * 1024 * 1024:
@@ -372,28 +416,38 @@ async def reply_with_exports(service, message, history, identity, client_platfor
     words = set(re.findall(r'[a-z]+', message.lower()))
     generic = words.issubset(GENERIC) and not re.search(r'\d', message)
     formats = set('xlsx' if value in ('xlsx', 'excel') else 'pdf' for value in re.findall(r'\b(pdf|excel|xlsx)\b', message.lower()))
+    chart_styles = requested_chart_styles(message)
     if exporting and not generic and words.issubset(GENERIC | {'task', 'tasks', 'project', 'projects'}):
         return AssistantReply('Please specify the task/project report, employee or scope, and period, or display it first and ask for PDF or Excel.', query_context={}), [], []
     if exporting and not generic and not words.intersection({'attendance', 'task', 'tasks', 'project', 'projects',
             'effort', 'efforts', 'booked', 'timesheet', 'leave', 'visits', 'visit', 'location', 'locations',
             'work', 'working', 'hours', 'productive', 'productivity', 'idle', 'activity', 'late', 'lateness',
-            'absent', 'present', 'workload', 'overruns', 'headcount', 'count', 'punch', 'punchout'}):
+            'absent', 'present', 'workload', 'overruns', 'headcount', 'count', 'punch', 'punchout',
+            'punched', 'punching', 'punchin', 'shift', 'checkin', 'checking'}):
         return AssistantReply('Please specify which report to export, its employee/scope and period, or display it first and ask for PDF or Excel.', query_context={}), [], []
     if exporting and generic:
         if not previous:
+            selected = context.get('selection', {})
+            if context.get('kind') == 'semantic_question' and selected.get('action') == 'export_attendance' and 'format' in selected.get('pending_fields', []):
+                if len(formats) == 1:
+                    return await service._reply(message, history, identity, client_platform=client_platform)
+                return AssistantReply('Which export format: PDF or Excel (XLSX)?', query_context=context), [], []
             return AssistantReply('Please display the report first (or narrow its scope if it is too large), then ask to export it as PDF or Excel.', query_context={}), [], []
         if len(formats) != 1:
             reply = AssistantReply('Which export format: PDF or Excel (XLSX)?', query_context=context)
-            reply.export_snapshot = previous
+            reply.export_snapshot = style_export(previous, chart_styles)
             return reply, [], []
-        return await export_snapshot(previous, formats.pop(), identity, service.backend, context)
-    direct = exporting and not ('attendance' in words and not words.intersection({'chart', 'charts', 'graph'}))
+        return await export_snapshot(previous, formats.pop(), identity, service.backend, context, chart_styles)
+    direct = exporting and not ('attendance' in words and not words.intersection(
+        {'chart', 'charts', 'graph', 'late', 'lateness', 'punch', 'shift', 'after'}))
     question = message
     if direct:
         question = re.sub(r'\b(?:in|as|to)\s+(?:an?\s+)?(?:pdf|excel|xlsx)(?:\s+(?:format|file))?\b', '', question, flags=re.I)
         question = re.sub(r'\b(?:pdf|excel|xlsx)\b', '', question, flags=re.I)
         question = re.sub(r'\b(?:export|download)\b', 'show', question, flags=re.I)
         question = re.sub(r'\b(?:with|including)\s+(?:a\s+)?charts?\b', '', question, flags=re.I)
+        kind = r'(?:pie|pi|pic|circle|bar|column|donut|doughnut)'
+        question = re.sub(r'\b' + kind + r'(?:\s*(?:and|or|,|/)\s*(?:a\s+)?' + kind + r')*\s*(?:chart|graph)s?\b', '', question, flags=re.I)
     sources = []
     token = capture_sources.set(sources)
     deferred = defer_export.set(direct)
@@ -403,6 +457,8 @@ async def reply_with_exports(service, message, history, identity, client_platfor
         defer_export.reset(deferred)
         capture_sources.reset(token)
     reply, tools, reports = result
+    if previous and is_acknowledgement(message):
+        reply.export_snapshot = previous
     if not reports and service.backend and (sources or getattr(reply, 'charts', [])):
         if not isinstance(reply, AssistantReply):
             reply = AssistantReply(reply, model_content='An authorized report was handled locally.')
@@ -411,10 +467,10 @@ async def reply_with_exports(service, message, history, identity, client_platfor
             reply.export_snapshot = snapshot
             result = reply, tools, reports
             if direct and len(formats) == 1:
-                return await export_snapshot(snapshot, formats.pop(), identity, service.backend, getattr(reply, 'query_context', None) or {})
+                return await export_snapshot(snapshot, formats.pop(), identity, service.backend, getattr(reply, 'query_context', None) or {}, chart_styles)
             if direct:
                 pending = AssistantReply(str(reply) + '\nWhich export format: PDF or Excel (XLSX)?',
                     model_content=reply.model_content, query_context=reply.query_context, charts=reply.charts)
-                pending.export_snapshot = snapshot
+                pending.export_snapshot = style_export(snapshot, chart_styles)
                 return pending, tools, reports
     return result

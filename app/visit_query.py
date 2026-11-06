@@ -8,7 +8,7 @@ from pydantic import Field, ValidationError, model_validator, field_validator
 
 from app.manager_query import report_period
 from app.schemas import StrictModel
-from app.task_report import AssistantReply
+from app.task_report import AssistantReply, period_fragment
 
 
 class VisitArgs(StrictModel):
@@ -78,6 +78,9 @@ def clean(value):
 def parse_question(message):
     """Extract only explicit names; never guess a client/employee ID."""
     text = message.strip().replace('\u2019', "'")
+    if (re.search(r'\b(?:working|wfh|wfo|work\s+arrangements?)\b', text, re.I)
+            and not re.search(r'\b(?:gps|recorded|capture[ds]?|visits?|visited)\b', text, re.I)):
+        return None
     if re.search(r'\b(?:attendance|punch[- ]?(?:in|out)?)\b', text, re.I):
         return None
     if not re.search(r'\b(?:visit(?:ed|s|ing|ors)?|went|location|where\s+(?:is|was))\b', text, re.I):
@@ -194,9 +197,16 @@ def render(data):
 async def visit_reply(message, context, identity, backend):
     previous = context.get('kind') == 'visit_location'
     parsed = parse_question(message)
-    if parsed is None and re.search(r'\b(?:attendance|tasks?|efforts?|payroll|leave|help|hello|hi)\b', message, re.I):
+    scope_reply = re.fullmatch(r'\s*(?:(?:only|just|for)\s+)?(?:(?:my|our|the|whole)\s+)*(team|company|me|myself)\s*[.!?]*\s*', message, re.I) if previous else None
+    if parsed is None and re.search(r'\b(?:attendance|tasks?|efforts?|booked|timesheets?|working|productive|idle|activity|payroll|leave|help|hello|hi)\b', message, re.I):
         return None
-    followup = previous and (re.fullmatch(r'\s*(?:next(?:\s+page)?|more|(?:for\s+)?(?:the\s+)?(?:last|past)\s+\d+\s+days|(?:for\s+)?20\d{2}-\d{2}(?:-\d{2})?)\s*[?.]?\s*', message, re.I)
+    if (parsed is None and previous and context.get('pending') in ('employee', 'client')
+            and not scope_reply and not period_fragment(message)
+            and (len(message) > 120 or re.search(
+                r'\b(?:can|could|would|what|why|how|show|tell|explain|describe|performance|overview|information|report|reports|hours|history)\b',
+                message, re.I))):
+        return None
+    followup = previous and (scope_reply or period_fragment(message) or re.fullmatch(r'\s*(?:next(?:\s+page)?|more|(?:for\s+)?(?:the\s+)?(?:last|past)\s+\d+\s+days|(?:for\s+)?20\d{2}-\d{2}(?:-\d{2})?)\s*[?.]?\s*', message, re.I)
                             or context.get('pending') in ('period', 'employee', 'client'))
     if parsed is None and not followup: return None
     selected = dict(context.get('args', {})) if followup else {}
@@ -209,6 +219,12 @@ async def visit_reply(message, context, identity, backend):
         selected = {k: v for k, v in parsed.items() if k in ('action', 'employee_name', 'client_name', 'latest')}
         if parsed.get('error'): return reply(parsed['error'], 'period')
         if parsed['dates']: selected.update(start_date=parsed['dates'][0], end_date=parsed['dates'][1])
+    elif scope_reply:
+        scope = scope_reply[1].lower()
+        scope = 'self' if scope in ('me', 'myself') else scope
+        if scope not in identity.scopes:
+            raise HTTPException(403, 'This request is outside your authorized employee scope.')
+        selected.update(scope=scope, employee_id=None, employee_name=None, page=1)
     elif context.get('pending') in ('employee', 'client'):
         field = context['pending']
         match = re.fullmatch(r'\s*(?:employee\s+(?:id\s*)?)?#?(\d+)\s*', message, re.I) if field == 'employee' else None
@@ -233,11 +249,11 @@ async def visit_reply(message, context, identity, backend):
     personal = (employee is not None and employee.lower() in ('my', 'me', 'i', 'my own')) or (
         bool(followup) and selected.get('scope') == 'self' and not employee and not selected.get('employee_id'))
     if personal: selected['employee_name'] = None
-    selected['scope'] = 'self' if personal else 'company' if 'company' in identity.scopes else 'team' if 'team' in identity.scopes else 'self'
+    selected['scope'] = 'self' if personal else selected['scope'] if followup and selected.get('scope') else 'company' if 'company' in identity.scopes else 'team' if 'team' in identity.scopes else 'self'
     if selected.get('action') == 'location' and not personal and not employee and not selected.get('employee_id'):
         return reply('Which employee should I check? Please provide their full name.', 'employee')
     if selected.get('action') == 'visits' and not personal and not employee and not selected.get('client_name') and not selected.get('employee_id'):
-        return reply('Which employee or client should I check? Please include the name in your question.')
+        return reply('Which employee or client should I check? Please include the name in your question.', 'employee')
     if not selected.get('latest') and not selected.get('start_date') and selected.get('action') != 'lms_location':
         return reply('Which date or period should I check? Use today, last 7 days, or a date range.', 'period')
     try:
