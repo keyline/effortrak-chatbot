@@ -50,7 +50,7 @@ def period_fragment(message):
         or words.intersection({'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years', 'today', 'yesterday', 'tomorrow'})))
 
 
-def task_result(data: dict, *, daily: bool) -> TaskResult:
+def task_result(data: dict, *, daily: bool, page=1) -> TaskResult:
     context = {'module': 'tasks', 'scope': data['scope'], 'employee_ids': data['employee_ids'],
                'date' if daily else 'month': data['date' if daily else 'month']}
     if daily:
@@ -84,16 +84,23 @@ def task_result(data: dict, *, daily: bool) -> TaskResult:
             lines.append(f"More tasks are available. Ask for page {data['page'] + 1} for the same date and scope.")
     else:
         rows = data['rows']
+        from app.report_paging import report_page
+        visible, page_note = report_page(rows, page)
+        context['page'] = page
         safe = {key: data[key] for key in ('scope', 'month', 'employee_ids')}
         safe['rows'] = [{key: row[key] for key in ('employee_id', 'work_status_id', 'task_count', 'planned_minutes')}
-                        for row in rows]
+                        for row in visible]
+        safe['task_count'] = sum(int(row['task_count']) for row in rows)
+        safe['planned_minutes'] = sum(int(row['planned_minutes']) for row in rows)
         lines = [f"Task summary for {data['month']} - {data['scope']} scope",
                  f"Employees with matching tasks: {len({row['employee_id'] for row in rows})}",
                  f"Tasks: {sum(int(row['task_count']) for row in rows)} | "
                  f"Total planned time: {duration(sum(int(row['planned_minutes']) for row in rows))}", '']
-        for row in rows:
+        for row in visible:
             lines.append(f"Employee #{row['employee_id']} | Status ID {row['work_status_id']} | "
                          f"Tasks: {row['task_count']} | Planned: {duration(int(row['planned_minutes']))}")
+        if page_note:
+            lines.extend(['', page_note])
     if not data['rows']:
         if daily and data['task_count']:
             lines.append('No tasks are on this page. Ask for page 1 to return to the first page.')
@@ -106,4 +113,4 @@ def task_result(data: dict, *, daily: bool) -> TaskResult:
     if daily:
         safe['notice'] += ' Booked time covers available linked timesheet entries only, not attendance time.'
     lines.extend(['', safe['notice']])
-    return TaskResult(safe, AssistantReply('\n'.join(lines).strip(), model_content=json.dumps(safe), query_context=context))
+    return TaskResult(safe, AssistantReply('\n'.join(lines).strip(), model_content=json.dumps(safe), query_context=context), chart_source=data)

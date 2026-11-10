@@ -20,7 +20,7 @@ class VisitArgs(StrictModel):
     start_date: str | None = None
     end_date: str | None = None
     latest: bool = False
-    page: int = Field(default=1, ge=1, le=100)
+    page: int = Field(default=1, ge=1, le=10000)
 
     @model_validator(mode='after')
     def dates(self):
@@ -66,7 +66,7 @@ class VisitData(StrictModel):
     timezone: str = Field(pattern=r'^Asia/Kolkata$')
     rows: list[VisitRow] = Field(max_length=20)
     has_more: bool
-    page: int = Field(ge=1, le=100)
+    page: int = Field(ge=1, le=10000)
 
 
 def clean(value):

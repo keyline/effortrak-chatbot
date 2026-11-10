@@ -34,7 +34,10 @@ def snapshot(endpoint='manager-report', kind='bar'):
     source = dict(endpoint=endpoint, arguments=dict(scope='self'), data=dict(scope='self',
         rows=[dict(employee_id=101, employee_name='=HYPERLINK("https://invalid.example")',
                    total=3.75, missing=None, location=dict(coordinates=[22.5, 88.3]))],
-        has_more=True, notice='Only the returned page is included.'))
+        notice='Complete requested report.'))
+    if endpoint in ('daily-tasks', 'project-tasks', 'visit-location'):
+        source['arguments']['page'] = 1
+        source['data'].update(page=1, has_more=False)
     return make_snapshot(AssistantReply('Displayed report\nOnly the returned page is included.', charts=[chart(kind)]), [source], actor())
 
 
@@ -47,9 +50,9 @@ def test_all_report_sources_export_bounded_authorized_data(endpoint, format):
     assert tools == ['export_report']
     assert reply.export_snapshot == saved
     assert files[0]['payload'].startswith(b'%PDF-' if format == 'pdf' else b'PK')
-    assert 'page/truncation' in reply
+    assert 'complete report selection' in reply and 'All matching pages' in reply
     service.revalidate.assert_awaited_once()
-    service.call.assert_awaited_once_with(endpoint, 'test-token', dict(scope='self'))
+    service.call.assert_awaited_once_with(endpoint, 'test-token', saved['sources'][0]['arguments'])
 
 
 @pytest.mark.parametrize('kind', ['pie', 'doughnut', 'bar', 'line', 'table'])

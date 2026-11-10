@@ -151,7 +151,7 @@ class BackendClient:
         if current.policy_key != identity.policy_key:
             raise HTTPException(409, 'Permissions changed. Start a new conversation.')
 
-    async def work_report(self, identity: Identity, args):
+    async def work_report(self, identity: Identity, args, *, page=1):
         await self.revalidate(identity)
         if args.scope not in identity.scopes or 'attendance' not in identity.modules:
             raise HTTPException(403, 'Work report is outside your authorized scope.')
@@ -195,7 +195,7 @@ class BackendClient:
                         raise ValueError('Unauthorized review tracking')
         except (ValidationError, ValueError, TypeError):
             raise HTTPException(502, 'Invalid backend work report.') from None
-        return format_work_report(parsed)
+        return format_work_report(parsed, page=page)
 
     async def find_employee(self, identity: Identity, scope: str, name: str, module: str = 'attendance') -> dict:
         await self.revalidate(identity)
@@ -233,8 +233,8 @@ class BackendClient:
         month = date[:7] if date else args.month
         if (data.get('data_source') != 'effortrak_backend' or data.get('scope') != args.scope
                 or data.get('month') != month or (date is not None and data.get('date') != date)
-                or not isinstance(ids, list) or len(ids) > 50
-                or any(type(value) is not int or value <= 0 for value in ids)
+                or not isinstance(ids, list)
+                or any(type(value) is not int or value <= 0 for value in ids) or len(set(ids)) != len(ids)
                 or (args.scope == 'self' and any(value != identity.user_id for value in ids))
                 or (args.employee_id is not None and ids != [args.employee_id])
                 or not isinstance(rows, list)
@@ -274,8 +274,8 @@ class BackendClient:
             payload = base64.b64decode(data.pop('payload_base64'), validate=True)
             employees = data['employee_ids']
             if (data.get('data_source') != 'effortrak_backend' or data.get('format') != args.format
-                    or not isinstance(employees, list) or len(employees) > 50
-                    or any(type(value) is not int or value <= 0 for value in employees)
+                    or not isinstance(employees, list)
+                    or any(type(value) is not int or value <= 0 for value in employees) or len(set(employees)) != len(employees)
                     or (args.scope == 'self' and any(value != identity.user_id for value in employees))
                     or (args.employee_id is not None and employees != [args.employee_id])
                     or len(payload) > 8 * 1024 * 1024 or not payload
@@ -315,8 +315,8 @@ class BackendClient:
             raise HTTPException(502, 'Invalid backend project task response.')
         ids, rows = data.get('employee_ids'), data.get('rows')
         if (data.get('data_source') != 'effortrak_backend' or data.get('scope') != args.scope
-                or not isinstance(ids, list) or len(ids) > 50
-                or any(type(value) is not int or value <= 0 for value in ids)
+                or not isinstance(ids, list)
+                or any(type(value) is not int or value <= 0 for value in ids) or len(set(ids)) != len(ids)
                 or not isinstance(rows, list)
                 or (args.scope == 'self' and any(value != identity.user_id for value in ids))
                 or (args.employee_id is not None and ids != [args.employee_id])
@@ -372,13 +372,19 @@ class BackendClient:
                 raise HTTPException(502, 'Backend punch-time filters are unavailable or inconsistent. Update the web backend and retry.')
         if (data.get('data_source') != 'effortrak_backend' or data.get('scope') != args.scope
                 or data.get('report') != args.report or data.get('start_date') != start or data.get('end_date') != end
-                or not isinstance(ids, list) or len(ids) > 50 or any(type(value) is not int or value <= 0 for value in ids)
+                or not isinstance(ids, list)
+                or any(type(value) is not int or value <= 0 for value in ids) or len(set(ids)) != len(ids)
                 or (args.scope == 'self' and ids != [identity.user_id])
                 or (args.employee_id is not None and ids != [args.employee_id])
-                or not isinstance(rows, list) or len(rows) > 50
+                or not isinstance(rows, list)
                 or type(data.get('matched_count')) is not int or data['matched_count'] < len(rows)
                 or type(data.get('details_truncated')) is not bool or not isinstance(data.get('notice'), str)):
             raise HTTPException(502, 'Invalid backend manager report response.')
+        if args.report == 'late_punchin':
+            row_ids = [row.get('employee_id') for row in rows if isinstance(row, dict)]
+            if (len(rows) > len(ids) or any(type(value) is not int for value in row_ids)
+                    or len(set(row_ids)) != len(rows)):
+                raise HTTPException(502, 'Invalid backend punch-in employee selection.')
         if args.report in ('present', 'absent') and start == end:
             coverage = data.get('attendance_coverage')
             if (not isinstance(coverage, dict) or coverage.get('employee_count') != len(ids)

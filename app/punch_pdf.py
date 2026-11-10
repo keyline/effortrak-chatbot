@@ -105,6 +105,8 @@ def punch_pdf_bytes(snapshot, validate_chart):
 
     # Charts follow the data; summary row numbers replace long, repeated legends.
     chart_labels = {f"{row['employee_name']} (#{row['employee_id']})": str(index) for index, row in enumerate(rows, 1)}
+    if len(rows) > 50:
+        chart_labels[f'Other employees ({len(rows) - 19})'] = 'Other'
     palette = ['#247765', '#4367C8', '#D39619', '#A45B93', '#697982', '#C35454']
     panels = []
     for chart in snapshot.get('charts', []):
@@ -132,7 +134,8 @@ def punch_pdf_bytes(snapshot, validate_chart):
                     graph.bars[index].fillColor = colors.HexColor(palette[index % len(palette)])
         drawing.add(graph)
         panel = [p(chart['title']), drawing]
-        panel.append(p('Numbers refer to Employee Summary rows.' if mapped else 'Chart categories: ' + '; '.join(
+        panel.append(p(('Numbers refer to Employee Summary rows. Other groups all remaining employees.' if 'Other' in labels
+            else 'Numbers refer to Employee Summary rows.') if mapped else 'Chart categories: ' + '; '.join(
             f"{index + 1}. {label}: " + ', '.join(str(series['values'][index]) for series in chart['series'])
             for index, label in enumerate(chart['labels']))))
         if len(chart['series']) > 1:

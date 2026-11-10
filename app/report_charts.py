@@ -38,6 +38,20 @@ def make_chart(kind, title, unit, labels, series, note, subtitle=''):
     return ReportChart(type=kind, title=title, unit=unit, labels=labels, series=series, note=note, subtitle=subtitle).model_dump()
 
 
+def punch_chart_data(rows):
+    rows = sorted(rows, key=lambda row: (-row['count'], row['employee_name'].casefold(), row['employee_id']))
+    shown = rows[:19] if len(rows) > 50 else rows
+    labels = [f"{row['employee_name'][:225]} (#{row['employee_id']})" for row in shown]
+    values = [None if row.get('assessable') is False else row['count'] for row in shown]
+    note = ''
+    if len(shown) < len(rows):
+        remaining = rows[len(shown):]
+        labels.append(f'Other employees ({len(remaining)})')
+        values.append(None if any(row.get('assessable') is False for row in remaining) else sum(row['count'] for row in remaining))
+        note = f'Top 19 employees by matching days; the remaining {len(remaining)} employees are grouped as Other employees. '
+    return labels, values, note
+
+
 async def build_report_chart(service, identity, selected, *, chart_types=None):
     start, end = date.fromisoformat(selected['start_date']), date.fromisoformat(selected['end_date'])
     metric = selected.get('chart_metric')
@@ -54,15 +68,15 @@ async def build_report_chart(service, identity, selected, *, chart_types=None):
             threshold=selected.get('threshold') or 0,
             punch_basis=selected.get('punch_basis') or 'late_cutoff',
             punch_after=selected.get('punch_after'), min_delay_minutes=selected.get('min_delay_minutes') or 0))
-        text, used, rows = render_report(data), ['get_manager_report'], data['rows']
+        text, used, rows = render_report(data, page=selected.get('page') or 1), ['get_manager_report'], data['rows']
+        selected['page'] = selected.get('page') or 1
         if not rows or not any(row['count'] for row in rows):
             return text + '\nNo matching punch-in days are available to chart.', [], used
-        if data['details_truncated'] or data['matched_count'] != len(rows) or len(rows) > 50:
-            return text + '\nPlease narrow the selection; punch-in charts require a complete report of at most 50 employees.', [], used
-        labels = [f"{row['employee_name'][:225]} (#{row['employee_id']})" for row in rows]
-        values = [None if row.get('assessable') is False else row['count'] for row in rows]
+        if data['details_truncated'] or data['matched_count'] != len(rows):
+            return text + '\nPlease narrow the selection; punch-in charts require a complete report.', [], used
+        labels, values, grouping_note = punch_chart_data(rows)
         unassessed = data.get('unassessed_days', sum(row.get('unassessed_days', 0) for row in rows))
-        note = ('Matching first daily punch-ins under the report filters. Each employee/date counts once. '
+        note = (grouping_note + 'Matching first daily punch-ins under the report filters. Each employee/date counts once. '
                 'Slices represent shares of matching punch-in days, not late versus on-time attendance. '
                 'The report time filter, reference-time quality and coverage notes still apply.')
         if unassessed:
@@ -227,6 +241,26 @@ async def build_report_chart(service, identity, selected, *, chart_types=None):
             series = [{'name': 'Recorded hours', 'values': [round(sum(item[index] for item in paired) / 3600, 4) for index in (1, 2)]}]
         kind = 'doughnut' if kind == 'auto' else kind
         unit, title = 'hours', 'Productive versus idle time'
+    if len(series) > 20:
+        # Aggregate the full selection instead of silently dropping employee series.
+        points = {day: [getattr(item, 'activity' if metric == 'activity' else 'attendance_minutes')
+                        for row in rows for item in row.daily if str(item.date) == day
+                        and getattr(item, 'activity' if metric == 'activity' else 'attendance_minutes') is not None]
+                  for day in dates}
+        labels = dates
+        series = [{'name': 'Mean recorded employee activity' if metric == 'activity' else 'Total recorded attendance hours',
+                   'values': [round(sum(points[day]) / (len(points[day]) if metric == 'activity' else 60), 4)
+                              if points[day] else None for day in dates]}]
+        note += (' Daily activity is the arithmetic mean across employees with a recorded score; missing scores are excluded.'
+                 if metric == 'activity' else ' Daily hours sum all authorized employees with recorded attendance.')
+    if len(labels) > 50:
+        # Only additive working-hour comparisons reach this branch.
+        values = series[0]['values']
+        ranked = sorted(zip(labels, values), key=lambda item: (item[1] is None, -(item[1] or 0), item[0]))
+        labels = [label for label, _ in ranked[:19]] + ['Other employees']
+        remaining = [value for _, value in ranked[19:] if value is not None]
+        series[0]['values'] = [value for _, value in ranked[:19]] + [round(sum(remaining), 4) if remaining else None]
+        note += ' Top 19 employees are shown individually; Other employees sums all remaining recorded hours.'
     if all(value is None for item in series for value in item['values']):
         return 'No recorded values are available for this chart under the current module access and period.', [], ['get_employee_work_report']
     chart = make_chart(kind, f'{title} - {data.period.start} to {data.period.end}', unit, labels, series, note)

@@ -91,8 +91,8 @@ class WorkData(StrictModel):
     period: WorkRequestedPeriod
     review_period: WorkPeriod
     detailed_review: bool
-    employee_ids: list[int] = Field(max_length=10)
-    rows: list[WorkEmployee] = Field(max_length=10)
+    employee_ids: list[int]
+    rows: list[WorkEmployee]
 
 
 def metric(value, *, seconds=False):
@@ -101,11 +101,13 @@ def metric(value, *, seconds=False):
     return duration(value // 60 if seconds else value)
 
 
-def format_work_report(data: WorkData) -> TaskResult:
+def format_work_report(data: WorkData, *, page=1) -> TaskResult:
+    from app.report_paging import report_page
+    rows, page_note = report_page(data.rows, page)
     period = data.period
     label = str(period.start) if period.start == period.end else f'{period.start} to {period.end}'
     lines = [f'Employee work report - {label}']
-    for row in data.rows:
+    for row in rows:
         summary = row.summary
         lines.extend(['', row.employee_name])
         if period.start == period.end:
@@ -132,7 +134,9 @@ def format_work_report(data: WorkData) -> TaskResult:
     if not data.rows:
         lines.append('No active employees are available in this authorized scope.')
     lines.append('Attendance and tracker hours differ; activity is not a work-quality rating.')
+    if page_note:
+        lines.append(page_note)
     context = {'module': 'attendance', 'report': 'work_summary', 'scope': data.scope, 'employee_ids': data.employee_ids,
-               'start_date': str(period.start), 'end_date': str(period.end), 'work_report': True}
+               'start_date': str(period.start), 'end_date': str(period.end), 'work_report': True, 'page': page}
     return TaskResult({'handled_locally': True, 'report': 'work_summary'},
                       AssistantReply('\n'.join(lines), model_content='An authorized employee work report was displayed locally; records and screenshots were not sent to the model.', query_context=context), chart_source=data)

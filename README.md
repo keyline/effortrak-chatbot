@@ -263,6 +263,14 @@ are handled locally; pronoun-based follow-ups retain the selected subject even i
 the model omits its follow-up flag. Explicit scope changes clear the old employee
 filter. Every resulting read/export still checks current backend permissions.
 
+Presentation follow-ups such as `Tell me their names?`, `Who were they?`,
+`Show their details` and `Just the count` reuse a complete active report selection
+locally. They change the answer style, not the date, employee scope, page or report
+filters, and do not replay an old export or chart. Missing/pending selections and
+new or sensitive questions are not treated as presentation changes. Deploy
+`app/semantic_query.py` and restart the worker for this fix; no client or database
+change is required. Regression coverage is in `tests/test_report_style_memory.py`.
+
 `Thank you` preserves the active report and its export snapshot. A new independent
 question starts a new selection; missing context does not restore an older person
 silently. This is active-request memory, not unrestricted recall of every person
@@ -357,10 +365,54 @@ both together). Ordinary requests and period-only follow-ups remain report-only.
 Style follow-ups retain the report's employee scope, period, occurrence threshold
 and punch-time filters. Chart values come from the same authorized manager report;
 no employee values are sent to the question interpreter. In-chat charts require a
-complete selection of at most 50 employees and up to 93 days. Empty results have no
+complete selection and up to 93 days. Empty results have no
 chart; unknown counts are never converted to zero. Existing web/mobile chart renderers
 are reused. Deploy AI-service `app/semantic_query.py` and `app/report_charts.py`
 together and restart the worker; no client or database update is required for this addition.
+
+Company/team punch-in reports now read authorized employees in keyset batches of 50,
+with bulk attendance reads per batch. There is no 50-employee rejection on this report
+path. The full result is retained for PDF/XLSX and export/download reauthorization;
+chat displays 50 matching employee rows per page. Ask `next page` or `page 2` to
+navigate while retaining scope, period and time filters. Page notices show overall
+counts separately from this-page counts. Aggregate questions count the full result.
+Charts with more than 50 categories show the top 19 employees plus one explicitly
+labelled Other employees group, preserving totals. They never silently drop employees.
+Existing 93-day, response/snapshot/file-size and export-cell safety limits remain;
+oversized exports must be narrowed rather than returned as incomplete files.
+The shared large-company implementation now covers every existing report family:
+attendance, booked effort, task summaries/insights, project tasks, work summaries,
+approved leave/history, leave rankings, locations and visits. Employee selection and
+download authorization no longer reject companies above 50 employees; work reports
+no longer reject selections above 10 employees. Tenant, role, department, module and
+task-visibility filters remain mandatory. This applies to existing and future companies.
+
+Chat detail is paginated (normally 50 rows; visits retain 20). Complete report totals
+remain separate from page totals. `next page`/`page N` retain the employee scope and
+period; changing the scope or period resets the page. Leave rankings intentionally
+remain top-N per leave type, but scan all eligible balances rather than stopping at 5,000.
+
+PDF/XLSX exports collect every matching page, unless the user explicitly requested a
+latest-N batch. Saved chat pages expand only when exporting, and permissions/data are
+checked again during generation and download. Truncated or changing data never becomes
+a successful partial export. Safety bounds remain: 2 MiB snapshot, 20,000 rows,
+500 fetched pages, 100,000 cells, and 8 MiB file. Exceeding a bound requires a narrower
+export selection, not a smaller company. Work periods remain at most 31 days.
+
+Deploy all modified AI Python modules together, including `app/report_paging.py`, and
+restart the AI worker. Deploy the modified web `app/Services/Ai` services together.
+Refresh web JS/CSS for page labels. Updated mobile models/screen provide styled page
+notices; older apps still receive the same text API shape. No database migration is needed.
+
+Deploy the large-company change backend first: `app/Services/Ai/AiEmployeeService.php`,
+`AiManagerReportService.php`, and `AiPunchTimeReport.php` in that same directory.
+Then deploy AI-service `app/backend_client.py`, `app/manager_query.py`,
+`app/semantic_query.py`, `app/report_charts.py`, `app/report_export.py`, and
+`app/punch_pdf.py`, and restart the worker. Deploy web `public/assets/js/ai-assistant.js`
+and refresh cached assets. Mobile page notices use `lib/models/ai_late_punch_report.dart`
+and `lib/pages/mainpages/ai_assistant/ai_late_punch_report_view.dart`; release a new app
+build for that presentation update. Existing clients still receive the page notice as
+report text. No database migration or new permissions are required.
 
 Punch-in Excel exports open on an employee-summary `Report` sheet. `Punch-in Records`
 contains every returned date-wise record in one filterable Excel table, with native
@@ -478,7 +530,7 @@ An undated latest-visit question checks recorded history. Undated visit lists as
 period. Lists have 20 rows per page; "next page" retains the employee/client/period.
 Employee IDs can be supplied during name clarification. Ambiguous or unavailable names
 require clarification; they never select an arbitrary match. Scope selection is bounded
-by existing active-employee visibility, with at most 50 report employees.
+by existing active-employee visibility, without a company-size selection cap.
 
 Employee location means the latest stored adaptive GPS point, optionally within a date
 range, not an on-demand live device reading. The response includes capture time, source,

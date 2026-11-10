@@ -173,7 +173,34 @@ def punch_time_report(data, include_names):
     return '\n'.join(lines)
 
 
-def render_report(data, *, include_names=True):
+def render_report(data, *, include_names=True, page=1):
+    if data.get('report') != 'late_punchin' and len(data['rows']) > 50:
+        from app.report_paging import report_page
+        rows, note = report_page(data['rows'], page)
+        if not rows:
+            return note
+        # The nested renderer describes this page. Complete totals remain explicit.
+        overview = f"Complete report: {len(data['rows'])} matching rows."
+        if data['report'] == 'booked_time':
+            known = [row['booked_minutes'] for row in data['rows'] if row['booked_minutes'] is not None]
+            total = duration(sum(known)) if known else 'not available'
+            overview += f" Total booked: {total}; timesheet entries: {sum(row['entry_count'] for row in data['rows'])}."
+        elif data['report'] in ('present', 'absent', 'late', 'missing_punchout'):
+            overview += f" Matching employees: {sum(row['count'] > 0 for row in data['rows'])}; matching employee-days: {sum(row['count'] for row in data['rows'])}."
+        view = {**data, 'rows': rows, 'notice': data['notice'] + '\n' + overview + '\n' + note}
+        return render_report(view, include_names=include_names)
+    if data.get('report') == 'late_punchin' and data.get('punch_filter') and len(data['rows']) > 50:
+        if not include_names:
+            return punch_time_report(data, False)
+        pages = (len(data['rows']) + 49) // 50
+        if not 1 <= page <= pages:
+            return f'This punch-in report has {pages} pages. Please choose a page from 1 to {pages}.'
+        rows = sorted(data['rows'], key=lambda row: (-row['count'], row['employee_name'].casefold(), row['employee_id']))
+        page_note = (f'Report page: {page} of {pages}. Overall matching employees: {sum(row["count"] > 0 for row in rows)}; '
+            f'overall matching punch-in days: {sum(row["count"] for row in rows)}. '
+            'Say "next page" or "page 1" to navigate. PDF/Excel exports include every returned employee, not only this page.')
+        view = {**data, 'rows': rows[(page - 1) * 50:page * 50], 'notice': data['notice'] + '\n' + page_note}
+        return punch_time_report(view, include_names)
     if data.get('report') == 'late_punchin' and data.get('punch_filter'):
         selected = data['punch_filter']
         legacy = (selected['punch_basis'] == 'late_cutoff' and selected['min_delay_minutes'] == 0 and not data.get('unassessed_days')

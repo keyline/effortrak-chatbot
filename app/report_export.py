@@ -1,4 +1,4 @@
-"""Local PDF/XLSX exports of displayed, bounded and reauthorized report snapshots."""
+"""Local PDF/XLSX exports of complete, bounded and reauthorized selections."""
 
 import copy
 import hashlib
@@ -33,6 +33,11 @@ READ_ENDPOINTS = frozenset({'attendance', 'daily-tasks', 'task-summary',
     'visit-location', 'employee-count'})
 capture_sources = ContextVar('report_export_sources', default=None)
 defer_export = ContextVar('report_export_deferred', default=False)
+MAX_SOURCE_BYTES = 2 * 1024 * 1024
+MAX_PAGES = 500
+MAX_ROWS = 20000
+MAX_CELLS = 100000
+PAGED_ENDPOINTS = frozenset({'daily-tasks', 'project-tasks', 'visit-location'})
 FILE_REQUEST = re.compile(r'\b(?:pdf|xlsx|excel|export|download)\b', re.I)
 GENERIC = frozenset('i want need like can could would you please kindly provide generate share give send get make convert into version me this that the same current report chart it in as to format a an download export pdf excel xlsx file with include including and data table tables charts graph graphs attach along pie pi pic circle bar column donut doughnut'.split())
 
@@ -80,6 +85,91 @@ def capture(endpoint, arguments, data):
         sources.append({'endpoint': endpoint, 'arguments': copy.deepcopy(arguments or {}), 'data': copy.deepcopy(data)})
 
 
+def check_size(value):
+    if len(json.dumps(value, allow_nan=False).encode()) > MAX_SOURCE_BYTES:
+        raise HTTPException(422, 'The complete report exceeds the snapshot byte limit. Narrow the report selection.')
+
+
+async def collect_report_data(endpoint, arguments, identity, backend):
+    """Replay a selection completely; never capture replay pages as new sources.
+
+    latest_limit is a total requested selection, not a page size to exhaust.
+    Original filters (including perpage) are preserved on every request.
+    """
+    args = copy.deepcopy(arguments)
+    paged = endpoint in PAGED_ENDPOINTS or 'page' in args
+    limit = args.get('latest_limit')
+    if limit is not None and (type(limit) is not int or not 1 <= limit <= MAX_ROWS):
+        raise HTTPException(422, 'Invalid latest report limit.')
+    first_page = args.get('page', 1) if limit else 1
+    if paged:
+        args['page'] = first_page
+    token = capture_sources.set(None)
+    try:
+        result = None
+        seen = set()
+        for page in range(first_page, first_page + MAX_PAGES):
+            current = await backend.call(endpoint, identity.credential, copy.deepcopy(args))
+            if not isinstance(current, dict):
+                raise HTTPException(502, 'Invalid backend report page.')
+            check_size(current)
+            if current.get('details_truncated'):
+                raise HTTPException(422, 'The backend returned truncated report details. Narrow the report selection before exporting.')
+            if 'page' in current or current.get('has_more'):
+                if (type(current.get('page')) is not int or current['page'] != page
+                        or type(current.get('has_more')) is not bool
+                        or not isinstance(current.get('rows'), list)):
+                    raise HTTPException(502, 'The backend did not return a verifiable complete report page.')
+                paged = True
+            elif paged:
+                raise HTTPException(502, 'Missing backend report pagination metadata.')
+            rows = current.get('rows', [])
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                raise HTTPException(502, 'Invalid backend report rows.')
+            marker = fingerprint(rows)
+            if ((rows and marker in seen) or (not rows and (current.get('has_more') or result is not None))):
+                raise HTTPException(502, 'Report pagination made no progress. No partial export was created.')
+            seen.add(marker)
+            if result is None:
+                result = copy.deepcopy(current)
+                if 'rows' in current:
+                    result['rows'] = []
+            else:
+                # Page metadata may vary; scope, totals and filters must remain stable.
+                ignored = {'rows', 'page', 'has_more', 'as_of', 'as_of_date', 'generated_at'}
+                if canonical({k: v for k, v in result.items() if k not in ignored}) != canonical({k: v for k, v in current.items() if k not in ignored}):
+                    raise HTTPException(409, 'Report data or scope changed while collecting pages. Display the report again.')
+            remaining = limit - len(result.get('rows', [])) if limit else len(rows)
+            if 'rows' in result:
+                result['rows'].extend(copy.deepcopy(rows[:remaining]))
+            if len(result.get('rows', [])) > MAX_ROWS:
+                raise HTTPException(422, 'The complete report exceeds the row limit. Narrow the report selection.')
+            check_size(result)
+            if not current.get('has_more') or (limit and len(result.get('rows', [])) >= limit):
+                if paged and 'has_more' in result:
+                    result.update(page=first_page, has_more=False)
+                return result
+            args['page'] = page + 1
+        raise HTTPException(422, 'The complete report exceeds the page limit. Narrow the report selection.')
+    finally:
+        capture_sources.reset(token)
+
+
+async def complete_sources(sources, identity, backend):
+    """Build snapshot sources using the same complete replay as authorization."""
+    if len(sources) > 8:
+        raise HTTPException(422, 'Too many report sources to export. Narrow the report selection.')
+    completed = []
+    for source in sources:
+        if source.get('oversized'):
+            raise HTTPException(422, 'The report exceeds the snapshot byte limit. Narrow the report selection.')
+        item = copy.deepcopy(source)
+        item['data'] = await collect_report_data(item['endpoint'], item['arguments'], identity, backend)
+        completed.append(item)
+        check_size(completed)
+    return completed
+
+
 def canonical(value):
     if isinstance(value, dict):
         return {key: canonical(item) for key, item in value.items()
@@ -102,10 +192,22 @@ async def authorize(snapshot, identity, backend):
             or snapshot.get('policy_key') != identity.policy_key
             or not isinstance(snapshot.get('sources'), list) or not 1 <= len(snapshot['sources']) <= 8):
         raise HTTPException(409, 'This report cannot be exported. Display it again and retry.')
+    check_size(snapshot)
     for source in snapshot['sources']:
         if source.get('endpoint') not in READ_ENDPOINTS or not isinstance(source.get('arguments'), dict):
             raise HTTPException(409, 'Invalid saved report selection. Display the report again.')
-        current = await backend.call(source['endpoint'], identity.credential, source['arguments'])
+        if source.get('pending_pages'):
+            token = capture_sources.set(None)
+            try:
+                displayed = await backend.call(source['endpoint'], identity.credential, source['arguments'])
+            finally:
+                capture_sources.reset(token)
+            if fingerprint(displayed) != fingerprint(source['data']):
+                raise HTTPException(409, 'Report data or access changed. Display the report again before exporting it.')
+            source['data'] = await collect_report_data(source['endpoint'], source['arguments'], identity, backend)
+            source.pop('pending_pages')
+            continue
+        current = await collect_report_data(source['endpoint'], source['arguments'], identity, backend)
         if fingerprint(current) != fingerprint(source['data']):
             raise HTTPException(409, 'Report data or access changed. Display the report again before exporting or downloading it.')
 
@@ -114,12 +216,19 @@ def inferred_charts(sources):
     charts = []
     for source in sources:
         data = source['data']
-        if data.get('details_truncated') or data.get('has_more'):
+        if source.get('pending_pages') or data.get('details_truncated') or data.get('has_more'):
             continue
         def add(title, unit, labels, values, kind='bar'):
-            if labels and len(labels) <= 50 and any(value is not None for value in values):
+            note = 'Based on the returned report data; missing values are unavailable, not zero.'
+            if len(labels) > 50:
+                ranked = sorted(zip(labels, values), key=lambda item: (item[1] is None, -(item[1] or 0), item[0]))
+                labels = [label for label, _ in ranked[:19]] + ['Other records']
+                rest = [value for _, value in ranked[19:]]
+                values = [value for _, value in ranked[:19]] + [sum(rest) if all(value is not None for value in rest) else None]
+                note += ' Top 19 categories are shown individually; Other records combines all remaining categories.'
+            if labels and any(value is not None for value in values):
                 charts.append(dict(type=kind, title=title, unit=unit, labels=labels,
-                    series=[dict(name=unit, values=values)], note='Based on the returned report data; missing values are unavailable, not zero.'))
+                    series=[dict(name=unit, values=values)], note=note))
         if source['endpoint'] == 'leave-balance':
             for group in data.get('groups', []):
                 add(group['leave_type'] + ' - remaining leave', 'days',
@@ -154,14 +263,29 @@ def inferred_charts(sources):
             labels = [f"{row.get('employee_name', row.get('project_name', 'Record'))} (#{row.get('employee_id', row.get('project_id', ''))})" for row in rows]
             if data.get('report') in ('late', 'late_punchin', 'missing_punchout', 'present', 'absent'):
                 filtered = data.get('report') == 'late_punchin' and data.get('punch_filter')
+                values = [None if row.get('assessable') is False else row['count'] for row in rows]
+                grouping = ''
+                if filtered:
+                    from app.report_charts import punch_chart_data
+                    labels, values, grouping = punch_chart_data(rows)
                 add('Matching punch-in days by employee' if filtered else data['report'].replace('_', ' ').title(),
-                    'matching employee-days' if filtered else 'recorded days', labels,
-                    [None if row.get('assessable') is False else row['count'] for row in rows])
-            elif data.get('report') in ('effort_by_employee', 'effort_by_project', 'task_overruns', 'workload') and rows and len(rows) <= 50:
+                    'matching employee-days' if filtered else 'recorded days', labels, values)
+                if grouping and charts:
+                    charts[-1]['note'] = grouping + charts[-1]['note']
+            elif data.get('report') in ('effort_by_employee', 'effort_by_project', 'task_overruns', 'workload') and rows:
+                note = 'Planned task time and recorded task-linked booked time are distinct; neither is attendance time.'
+                if len(rows) > 50:
+                    ordered = sorted(zip(labels, rows), key=lambda item: (-item[1]['planned_minutes'], item[0]))
+                    labels = [label for label, _ in ordered[:19]] + ['Other records']
+                    rest = [row for _, row in ordered[19:]]
+                    other = {key: sum(row[key] for row in rest) if all(row.get(key) is not None for row in rest) else None
+                             for key in ('planned_minutes', 'booked_minutes')}
+                    rows = [row for _, row in ordered[:19]] + [other]
+                    note += ' Top 19 planned-time categories are shown; Other records combines all remaining categories. Missing bookings remain unavailable.'
                 charts.append(dict(type='bar', title='Planned and booked time (separate measures)', unit='hours', labels=labels,
                     series=[dict(name=label, values=[None if row.get(key) is None else round(row[key] / 60, 4) for row in rows])
                         for key, label in [('planned_minutes', 'Planned'), ('booked_minutes', 'Booked')]],
-                    note='Planned task time and recorded task-linked booked time are distinct; neither is attendance time.'))
+                    note=note))
             elif data.get('report') == 'attendance_totals':
                 counts = Counter()
                 for row in rows:
@@ -181,6 +305,9 @@ def make_snapshot(reply, sources, identity, previous=None):
     if len(sources) > 8 or any(source.get('oversized') for source in sources):
         return None
     charts = copy.deepcopy(getattr(reply, 'charts', []))
+    if any(source['endpoint'] in PAGED_ENDPOINTS or 'page' in source['arguments'] for source in sources):
+        # Chat charts may cover just the displayed page; derive from the full selection.
+        charts = []
     if not charts:
         try:
             charts = inferred_charts(sources)
@@ -213,30 +340,63 @@ def scalar_rows(value, prefix=''):
 
 
 def data_tables(snapshot):
+    check_size(snapshot)
     tables = []
-    def walk(value, path, parent=None):
+    grouped = {}
+    cell_count = 0
+
+    def walk(value, path, parent=None, depth=0):
+        nonlocal cell_count
+        if depth > 20:
+            raise HTTPException(422, 'The report nesting exceeds the export limit. Narrow the report selection.')
         if isinstance(value, dict):
             for key, item in value.items():
                 if isinstance(item, (dict, list)):
-                    walk(item, f'{path} / {key}', parent)
+                    walk(item, f'{path} / {key}', parent, depth + 1)
         elif isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
             rows = [{**(parent or {}), **scalar_rows(item)} for item in value]
-            headers = list(dict.fromkeys(key for row in rows for key in row))
-            if len(rows) > 5000 or len(headers) > 80:
+            cell_count += sum(len(row) for row in rows)
+            if cell_count > MAX_CELLS:
                 raise HTTPException(422, 'This report is too large to export. Narrow the report selection.')
-            if headers:
-                tables.append((path, headers, [[row.get(key) for key in headers] for row in rows]))
+            grouped.setdefault(path, []).extend(rows)
             for index, item in enumerate(value):
-                label = {key: item[key] for key in ('employee_id', 'employee_name', 'leave_type') if key in item}
-                walk(item, f'{path} {index + 1}', {**(parent or {}), **label})
+                label = {key: item[key] for key in ('employee_id', 'employee_name', 'leave_type',
+                    'project_id', 'task_id', 'date', 'task_date') if key in item}
+                label[f'{path} / record'] = index + 1
+                walk(item, path, {**(parent or {}), **label}, depth + 1)
     for index, source in enumerate(snapshot['sources'], 1):
         data = source['data']
         metadata = scalar_rows(data)
+        if source['arguments'].get('latest_limit'):
+            metadata['export.requested_latest_limit'] = source['arguments']['latest_limit']
+            metadata['export.selected_rows'] = len(data.get('rows', []))
         if metadata:
             tables.append((f"{source['endpoint']} {index} / summary", ['Field', 'Value'], list(map(list, metadata.items()))))
-        walk(data, f"{source['endpoint']} {index}")
-    if len(tables) > 150 or sum(len(rows) * len(headers) for _, headers, rows in tables) > 100000:
+        if source['endpoint'] == 'manager-report' and data.get('report') == 'late_punchin' and len(data.get('rows', [])) > 50:
+            employees, entries = [], []
+            for row in data['rows']:
+                employees.append(scalar_rows(row))
+                for entry in row['entries']:
+                    entries.append({'employee_id': row['employee_id'], 'employee_name': row['employee_name'], **entry})
+            walk(employees, 'Punch-in employees')
+            for start in range(0, len(entries), 5000):
+                walk(entries[start:start + 5000], f'Punch-in records {start // 5000 + 1}')
+        else:
+            walk(data, f"{source['endpoint']} {index}")
+    for path, rows in grouped.items():
+        headers = list(dict.fromkeys(key for row in rows for key in row))
+        if len(rows) > MAX_ROWS or len(headers) > 80:
+            raise HTTPException(422, 'This report is too large to export. Narrow the report selection.')
+        if headers:
+            for start in range(0, len(rows), 5000):
+                title = path if len(rows) <= 5000 else f'{path} / part {start // 5000 + 1}'
+                tables.append((title, headers, [[row.get(key) for key in headers] for row in rows[start:start + 5000]]))
+    if len(tables) > 150 or sum(len(rows) * len(headers) for _, headers, rows in tables) > MAX_CELLS:
         raise HTTPException(422, 'This report is too large to export. Narrow the report selection.')
+    for _, _, rows in tables:
+        for row in rows:
+            for value in row:
+                safe_cell(value)
     return tables
 
 
@@ -271,7 +431,7 @@ def workbook_bytes(snapshot, tables):
     punch_report = build_punch_workbook(workbook, snapshot, safe_cell)
     if not punch_report:
         sheet.append(['Effortrak - exported report'])
-        sheet.append(['Displayed result only. Page, scope and truncation notices remain applicable.'])
+        sheet.append(['Complete authorized report selection. Explicit latest limits remain applicable.'])
         sheet.append(['Up to 10 charts are included when meaningful; all returned report data remains in the data sheets. Locations are not plotted as numeric measurements.'])
         for line in snapshot['text'].splitlines():
             sheet.append([safe_cell(line)])
@@ -332,7 +492,7 @@ def pdf_bytes(snapshot, tables):
     styles['BodyText'].leading = 11
     styles['BodyText'].wordWrap = 'CJK'
     paragraph = lambda value: Paragraph(escape('Unavailable' if value is None else str(value)), styles['BodyText'])
-    flow = [Paragraph('Effortrak Report', styles['Title']), paragraph('Export of the displayed result. Scope, page and truncation notes remain applicable. Up to 10 meaningful charts are included; all returned data is retained below.'), Spacer(1, 10)]
+    flow = [Paragraph('Effortrak Report', styles['Title']), paragraph('Complete authorized report selection. Explicit latest limits remain applicable. Up to 10 meaningful charts are included; all selected data is retained below.'), Spacer(1, 10)]
     palette = [colors.HexColor(value) for value in ('#247765', '#4367C8', '#D39619', '#A45B93', '#697982', '#C35454')]
     for chart in snapshot['charts']:
         valid_chart(chart)
@@ -390,7 +550,10 @@ def _pdf_table(headers, rows, paragraph):
 async def export_snapshot(snapshot, format, identity, backend, context, chart_styles=None):
     if format not in ('pdf', 'xlsx'):
         raise HTTPException(422, 'Choose PDF or Excel (XLSX).')
+    snapshot = copy.deepcopy(snapshot)
     await authorize(snapshot, identity, backend)
+    if not snapshot['charts']:
+        snapshot['charts'] = inferred_charts(snapshot['sources'])
     snapshot = style_export(snapshot, chart_styles)
     tables = data_tables(snapshot)
     payload = pdf_bytes(snapshot, tables) if format == 'pdf' else workbook_bytes(snapshot, tables)
@@ -399,7 +562,7 @@ async def export_snapshot(snapshot, format, identity, backend, context, chart_st
     report_id = str(uuid4())
     report = dict(report_id=report_id, filename=f'effortrak-report-{report_id[:8]}.{format}', format=format,
         download_url=f'/v1/reports/{report_id}/download', payload=payload, employee_ids=[], export_snapshot=snapshot)
-    reply = AssistantReply('Your displayed report is attached as ' + format.upper() + '. Included charts and tables use the same report data. Existing page/truncation notes still apply.',
+    reply = AssistantReply('Your complete report selection is attached as ' + format.upper() + '. All matching pages are included, subject to any explicitly requested latest limit. Page/truncation notices in the displayed chat refer to that chat view.',
         model_content='An authorized report was exported locally. No report records were sent to the model.', query_context=context)
     reply.export_snapshot = snapshot
     return reply, ['export_report'], [report]
@@ -462,7 +625,18 @@ async def reply_with_exports(service, message, history, identity, client_platfor
     if not reports and service.backend and (sources or getattr(reply, 'charts', [])):
         if not isinstance(reply, AssistantReply):
             reply = AssistantReply(reply, model_content='An authorized report was handled locally.')
+        if sources:
+            if direct:
+                sources = await complete_sources(sources, identity, service.backend)
+            else:
+                # Keep ordinary chat to one read. Expand a saved page only when exporting.
+                for source in sources:
+                    data = source.get('data', {})
+                    if source.get('endpoint') in PAGED_ENDPOINTS and (data.get('has_more') or data.get('page', 1) > 1):
+                        source['pending_pages'] = True
         snapshot = make_snapshot(reply, sources, identity, previous)
+        if snapshot is None and direct:
+            raise HTTPException(422, 'The complete report exceeds the snapshot limit. Narrow the report selection.')
         if snapshot:
             reply.export_snapshot = snapshot
             result = reply, tools, reports

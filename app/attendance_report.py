@@ -1,4 +1,5 @@
 import re
+from app.report_paging import report_page
 
 
 MONTHLY_OVERVIEW = re.compile(
@@ -13,10 +14,11 @@ def duration(minutes: int) -> str:
     return f'{minutes // 60}h {minutes % 60}m'
 
 
-def format_daily_report(data: dict) -> str:
+def format_daily_report(data: dict, *, page=1) -> str:
+    rows, page_note = report_page(data['rows'], page)
     lines = [f"Attendance for {data['date']} - {data['scope']} scope",
              f"Employees included: {len(data['employee_ids'])}"]
-    for row in data['rows']:
+    for row in rows:
         minutes = row['worked_minutes']
         lines.extend(['', f"{row['employee_name']} (employee #{row['employee_id']})",
                       f"Status: {row['status'] or 'Unclassified (not an absence)'}",
@@ -25,11 +27,12 @@ def format_daily_report(data: dict) -> str:
                       f"Punch out: {row.get('punch_out') or 'Not recorded'}"])
     if not data['rows']:
         lines.append('No attendance rows were returned in the authorized scope. This is not an absence count.')
-    lines.extend(['', data.get('notice', '')])
+    lines.extend(['', data.get('notice', ''), page_note])
     return '\n'.join(lines).rstrip()
 
 
-def format_monthly_report(data: dict) -> str:
+def format_monthly_report(data: dict, *, page=1) -> str:
+    rows, page_note = report_page(data['employee_summaries'], page)
     period = data['period']
     lines = [f"{data['scope'].capitalize()} attendance - {data['month']}",
              f"Period: {period['start']} to {period['end']}",
@@ -45,12 +48,12 @@ def format_monthly_report(data: dict) -> str:
     # Names already belong to the authorized attendance rows; no extra lookup is needed.
     names = {row['employee_id']: ' '.join(row['employee_name'].split())
              for row in data.get('rows', []) if isinstance(row.get('employee_name'), str)}
-    for employee in data['employee_summaries']:
+    for employee in rows:
         statuses = '; '.join(f'{status}: {count}' for status, count in sorted(employee['status_counts'].items()))
         name = names.get(employee['employee_id'])
         label = f"Employee #{employee['employee_id']}" + (f' ({name})' if name else '')
         lines.append(f"{label}: {statuses or 'No classified statuses'}; "
                      f"unclassified: {employee['unclassified_days']}; worked: {duration(employee['worked_minutes'])}")
     lines.extend(['', 'Each employee-date has one calendar status. Unclassified days are not absences. '
-                  'Worked time is recorded attendance time, not payroll payable time.', data.get('notice', '')])
+                  'Worked time is recorded attendance time, not payroll payable time.', data.get('notice', ''), page_note])
     return '\n'.join(lines).rstrip()

@@ -133,7 +133,12 @@ def test_chart_coverage_and_missing_values_are_not_misrepresented(condition):
         start_date='2026-10-01', end_date='2026-10-31', punch_basis='fixed_time', punch_after='10:30:00')
     text, charts, used = asyncio.run(build_report_chart(service, object(), selected, chart_types=['pie', 'bar']))
     assert used == ['get_manager_report']
-    if condition in ('empty', 'zero', 'truncated', 'too_many'):
+    if condition == 'too_many':
+        assert len(charts[0]['labels']) == 20
+        assert charts[0]['labels'][-1] == 'Other employees (32)'
+        assert sum(charts[0]['series'][0]['values']) == 102
+        assert 'remaining 32 employees' in charts[0]['note']
+    elif condition in ('empty', 'zero', 'truncated'):
         assert not charts
     elif condition == 'unassessable':
         assert [chart['type'] for chart in charts] == ['bar']
