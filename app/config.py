@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     ai_help_llm_fallback_enabled: bool = False
     ai_help_followups_enabled: bool = False
     database_path: str = 'data/chat.sqlite3'
+    application_log_path: str = 'logs/application.log'
     data_mode: Literal['sample', 'backend'] = 'sample'
     backend_url: str = ''
     ai_service_secret: SecretStr = SecretStr('')
@@ -39,4 +40,9 @@ class Settings(BaseSettings):
     @property
     def database_file(self) -> Path:
         path = Path(self.database_path)
+        return path if path.is_absolute() else ROOT / path
+
+    @property
+    def application_log_file(self) -> Path:
+        path = Path(self.application_log_path)
         return path if path.is_absolute() else ROOT / path

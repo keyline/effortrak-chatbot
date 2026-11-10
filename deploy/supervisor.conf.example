@@ -1,0 +1,22 @@
+; Host administrator: include this in your existing Supervisor configuration.
+; Confirm these paths and account name before installation. Create logs/ first.
+; Stop the manual worker before enabling this program; use only one manager.
+[program:effortrak-ai]
+directory=/home/keyline2/effortrakchatbot
+command=/home/keyline2/virtualenv/effortrakchatbot/3.13/bin/python -u -m uvicorn app.main:app --host 127.0.0.1 --port 8010 --no-proxy-headers --no-access-log --workers 1
+user=keyline2
+numprocs=1
+autostart=true
+autorestart=true
+startsecs=10
+startretries=3
+stopsignal=TERM
+stopwaitsecs=90
+stopasgroup=true
+killasgroup=true
+umask=0077
+environment=PYTHONUNBUFFERED="1"
+redirect_stderr=true
+stdout_logfile=/home/keyline2/effortrakchatbot/logs/uvicorn.log
+stdout_logfile_maxbytes=5MB
+stdout_logfile_backups=5

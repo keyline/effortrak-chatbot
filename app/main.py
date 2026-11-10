@@ -1,5 +1,8 @@
 import asyncio
 import json
+import logging
+import time
+from contextlib import suppress
 from contextlib import asynccontextmanager
 from uuid import UUID
 
@@ -10,6 +13,7 @@ from app.auth import Identity, authenticate
 from app.chat_service import ChatService
 from app.backend_client import BackendClient
 from app.config import Settings
+from app.diagnostics import configure_logging
 from app.schemas import ChatData, ChatRequest, ChatResponse
 from app.store import Store
 from app.token_usage import conversation_context
@@ -24,20 +28,72 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.store = Store(config.database_file)
-        app.state.backend = BackendClient(config) if config.data_mode == 'backend' else None
-        app.state.chat = ChatService(config, app.state.backend)
-        if app.state.chat.token_meter:
-            app.state.chat.token_meter.start()
-        app.state.chat_lock = asyncio.Lock()
-        yield
-        await app.state.chat.close()
-        if app.state.backend:
-            await app.state.backend.close()
+        configure_logging(config.application_log_file)
+        log = logging.getLogger(__name__)
+        log.info('service_starting')
+        app.state.backend = None
+        app.state.chat = None
+        heartbeat = None
+
+        async def pulse():
+            while True:
+                await asyncio.sleep(60)
+                log.info('service_heartbeat')
+
+        try:
+            app.state.store = Store(config.database_file)
+            app.state.backend = BackendClient(config) if config.data_mode == 'backend' else None
+            app.state.chat = ChatService(config, app.state.backend)
+            if app.state.chat.token_meter:
+                app.state.chat.token_meter.start()
+            app.state.chat_lock = asyncio.Lock()
+            heartbeat = asyncio.create_task(pulse())
+            log.info('service_ready')
+            yield
+        except BaseException:
+            log.exception('service_lifecycle_failed')
+            raise
+        finally:
+            log.info('service_stopping')
+            if heartbeat:
+                heartbeat.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat
+            try:
+                if app.state.chat:
+                    await app.state.chat.close()
+            except BaseException:
+                log.exception('service_chat_cleanup_failed')
+                raise
+            finally:
+                try:
+                    if app.state.backend:
+                        await app.state.backend.close()
+                except BaseException:
+                    log.exception('service_backend_cleanup_failed')
+                    raise
+            log.info('service_stopped')
 
     app = FastAPI(title='Effortrak AI REST API', version='0.2.0', lifespan=lifespan,
                   description='Sample mode or CodeIgniter-delegated real attendance. Use the backend gateway for real data.')
     app.state.config = config
+
+    @app.middleware('http')
+    async def request_diagnostics(request: Request, call_next):
+        started = time.monotonic()
+        log = logging.getLogger(__name__)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Route templates omit IDs; never log URLs, query strings, bodies or headers.
+            route = getattr(request.scope.get('route'), 'path', 'unmatched')
+            log.exception('request_failed route=%s duration_ms=%d', route,
+                          (time.monotonic() - started) * 1000)
+            raise
+        route = getattr(request.scope.get('route'), 'path', 'unmatched')
+        log.info('request_completed route=%s status=%d duration_ms=%d', route,
+                 response.status_code, (time.monotonic() - started) * 1000)
+        return response
 
     @app.middleware('http')
     async def local_only(request: Request, call_next):
