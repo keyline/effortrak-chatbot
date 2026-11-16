@@ -48,10 +48,10 @@ def test_lifecycle_and_request_failures_are_private(tmp_path):
 def test_startup_failure_is_recorded(tmp_path, monkeypatch):
     config = settings(tmp_path)
 
-    def broken_store(path):
+    def broken_store(*args):
         raise OSError('private-database-path')
 
-    monkeypatch.setattr('app.main.Store', broken_store)
+    monkeypatch.setattr('app.query.application.Store', broken_store)
     with pytest.raises(OSError), TestClient(create_app(config)):
         pass
     events = read_events(config.application_log_file)

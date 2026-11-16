@@ -1,0 +1,369 @@
+{
+  "version": 1,
+  "reviewed_on": "2026-11-13",
+  "basis": "Local source review and synthetic tests; production rollout and real-report reconciliation remain pending.",
+  "web_source_root": "../../effortrak_web",
+  "global_rules": {
+    "authorization": "Existing AI enablement, company subscription, module-specific seat rules, role permissions and record scope must all pass. Only authenticated Admin/Super Admin can report company records within their own company; every other role is self-only. Team scope is unavailable. A subscription alone grants no additional record scope.",
+    "tenant_isolation": "Authenticated company only; related tables must join on both record identifier and company identifier.",
+    "model_access": "Code-owned reporting vocabulary and typed selections only. No raw SQL execution, retrieved records or private documents in model prompts.",
+    "always_excluded": [
+      "passwords and hashes",
+      "credentials and tokens",
+      "salary and compensation",
+      "bank and tax identifiers",
+      "unapproved financial fields",
+      "biometric templates"
+    ],
+    "leave_reason_exception": "Only authenticated Admin/Super Admin with existing leave-read permission in their own company. All query positions and exports enforce this rule.",
+    "output": "Shared tables, suitable complete-result bar/pie charts, private reauthorized Excel/PDF exports. No module-specific parser or question training.",
+    "limits": "100 rows/page; native exports at most 5000 rows; SQL statement timeout 5 seconds. Canonical adapters retain their own workload limits."
+  },
+  "modules": [
+    {
+      "subscription_key": "attendance",
+      "status": "implemented_for_approved_reports",
+      "current_coverage": [
+        "calendar attendance",
+        "punch cutoff reports",
+        "leave requests",
+        "leave balances",
+        "active employee headcount"
+      ],
+      "datasets": [
+        "attendance",
+        "leave",
+        "employees"
+      ],
+      "sources": [
+        "app/Services/Ai/Query/Catalogue.php",
+        "app/Services/Ai/Query/QueryService.php",
+        "app/Services/Ai/AiPunchTimeReport.php",
+        "app/Services/Ai/AiLeaveBalanceService.php"
+      ],
+      "access": "Existing attendance/leave read and export permissions and employee visibility. Leave is bundled with Attendance.",
+      "calculation": "Calendar attendance preserves shifts, holidays, leave and overrides. Unclassified is not absent. Headcount is current; leave duration is whole-request duration for overlapping requests.",
+      "remaining": [
+        "Reconcile representative results with existing company reports",
+        "Verify all custom shift and leave edge cases in staging"
+      ]
+    },
+    {
+      "subscription_key": "task_management",
+      "status": "implemented_for_approved_reports",
+      "current_coverage": [
+        "actual booked effort",
+        "assigned task details and counts",
+        "project/employee/month/billing grouping",
+        "existing work-report adapter"
+      ],
+      "datasets": [
+        "effort",
+        "tasks"
+      ],
+      "sources": [
+        "app/Services/Ai/Query/Compiler.php",
+        "app/Services/Ai/AiWorkReportService.php",
+        "app/Services/Ai/AiAccessService.php"
+      ],
+      "access": "Existing task visibility mode, tracker departments and task-list permission. Effort additionally requires Effort Report permission.",
+      "calculation": "Recorded timesheet bookings and task estimates are separate measures. Missing booked duration is unknown, not zero. Employees without source rows are not included.",
+      "remaining": [
+        "Compare user-seat entitlement behavior with each existing task/report entry point",
+        "Review a separate missing-booking dataset before supporting zero-booking employees"
+      ]
+    },
+    {
+      "subscription_key": "asset_management",
+      "status": "implemented_initial_datasets",
+      "current_coverage": [
+        "current own approved asset custody",
+        "company serialized inventory",
+        "approved employee assignment history by checkout date",
+        "return status",
+        "asset/category/status counts",
+        "current authorized employee assignee name in inventory details and grouping"
+      ],
+      "datasets": [
+        "assets",
+        "asset_assignments"
+      ],
+      "tables": [
+        "am_assets",
+        "am_categories",
+        "am_asset_assignments"
+      ],
+      "sources": [
+        "app/Services/Assets/AssetDashboardService.php",
+        "app/Services/Assets/AssetAccessGuard.php",
+        "app/Services/Ai/Query/AssetCompiler.php"
+      ],
+      "approved_fields": [
+        "asset_id",
+        "asset_name",
+        "asset_tag",
+        "serial_number",
+        "category",
+        "status",
+        "criticality",
+        "purchase_date",
+        "warranty_expiry_date",
+        "assignment_id",
+        "employee_id",
+        "employee_name",
+        "checked_out_at",
+        "due_back_date",
+        "returned_date"
+      ],
+      "access": "Company subscription required. Current self custody follows the existing employee dashboard without granting registry access. Registry and assignment history require an explicit active asset_management seat, including Admin/Super Admin. Company scope requires existing company visibility. Team scope is unsupported.",
+      "calculation": "Inventory is current and excludes archived/accessory records. History uses checkout date, approved/not_required user custody and active employees; it includes returned assignments. It is not a historical stock reconstruction or a return-date report.",
+      "excluded": [
+        "purchase_cost",
+        "current_value",
+        "invoices",
+        "vendor financial details",
+        "documents",
+        "private notes",
+        "department custody",
+        "pending/rejected assignments"
+      ],
+      "remaining": [
+        "Maintenance event history",
+        "Accessory/kit quantities and return reconciliation",
+        "Department custody reporting",
+        "Archived/inactive employee history",
+        "Return-date-based reporting",
+        "Real-report reconciliation and mobile-device acceptance"
+      ]
+    },
+    {
+      "subscription_key": "lms",
+      "status": "implemented_initial_datasets",
+      "current_coverage": [
+        "existing authorized LMS location reader",
+        "current active lead/prospect/client/churned records",
+        "counts by current stage, priority, source and owner",
+        "creation and recorded conversion date cohorts",
+        "followups by scheduled due date, status, lead owner and scheduled employee",
+        "shared charts, private Excel/PDF and column refinements"
+      ],
+      "datasets": [
+        "lms_leads",
+        "lms_followups"
+      ],
+      "sources": [
+        "app/Controllers/Admin/LmsController.php",
+        "app/Services/Ai/AiVisitLocationService.php",
+        "app/Models/Lms/LmsClientModel.php",
+        "app/Models/Lms/LmsFollowupModel.php",
+        "app/Services/Ai/Query/Compiler.php",
+        "app/Services/Ai/AiAccessService.php"
+      ],
+      "access": "Company subscription, LMS role access and explicit active LMS seat; Super Admin retains the existing seat exemption. Company LMS scope requires Admin or Super Admin; non-admin manage-all-leads grants remain self-only in chat. Dataset scopes never grant unrelated company employee access. Self scope uses current lead assigned_to for both datasets, not created_by or the followup employee.",
+      "excluded": [
+        "deal values",
+        "private notes",
+        "call recordings",
+        "custom JSON fields",
+        "unreviewed contact details"
+      ],
+      "remaining": [
+        "Real-report reconciliation and mobile-device acceptance",
+        "Measured staging concurrency and index/query-plan checks",
+        "Historical stage/transfer events",
+        "Completion-date-based followup reports",
+        "Call analytics and recordings remain outside the initial catalogue"
+      ],
+      "tables": [
+        "lms_clients",
+        "lms_pipeline_stages",
+        "lms_followups"
+      ],
+      "calculation": "Current active LMS records including unassigned company records and all record types. Lead snapshot uses date filters for creation/conversion cohorts, not a historical state reconstruction. Followup period is scheduled due date; done/cancelled rows remain reportable. Open work filters active pending/snoozed. Related owner/stage/followup employee joins are tenant-bound."
+    },
+    {
+      "subscription_key": "field_sales",
+      "status": "partial_adapter_only",
+      "current_coverage": [
+        "existing authorized visit/location report reader"
+      ],
+      "datasets": [],
+      "sources": [
+        "app/Services/Ai/AiVisitLocationService.php"
+      ],
+      "access": "Existing field_sales entitlement, CLIENT VISIT LOGS permission and authorized employee scope; retain any subject-specific visibility from existing report services.",
+      "next_reports": [
+        "visit counts and status summaries",
+        "employee-wise recorded visits"
+      ],
+      "remaining": [
+        "Audit exact visit and client joins and allowed fields",
+        "Review visit outcome/duration semantics",
+        "Add native reporting only after result and permission tests"
+      ]
+    },
+    {
+      "subscription_key": "adaptive_tracking",
+      "status": "partial_adapter_only",
+      "current_coverage": [
+        "existing authorized recorded location reader"
+      ],
+      "datasets": [],
+      "sources": [
+        "app/Services/Ai/AiVisitLocationService.php",
+        "app/Services/NavigationEntitlementService.php"
+      ],
+      "access": "Existing adaptive_tracking entitlement, LOCATION HUB permission and subject visibility. Audit adaptive tracking seat allocation separately from Location Hub navigation.",
+      "next_reports": [
+        "recorded location/visit summaries",
+        "reviewed distance and tracking coverage measures"
+      ],
+      "excluded": [
+        "inferred whereabouts",
+        "unrecorded routes",
+        "unapproved raw location exports"
+      ],
+      "remaining": [
+        "Reconcile adaptive seat rules and retention",
+        "Use existing reviewed distance calculations",
+        "Define coverage gaps without inventing movement"
+      ]
+    },
+    {
+      "subscription_key": "screenshot",
+      "status": "partial_adapter_only",
+      "current_coverage": [
+        "authorized productive/idle/activity aggregates through existing work reader"
+      ],
+      "datasets": [],
+      "sources": [
+        "app/Services/Ai/AiWorkReportService.php"
+      ],
+      "access": "Existing work report permissions plus screenshot subscription, viewer entitlement, subject screenshot flag/entitlement and storage availability checks.",
+      "next_reports": [
+        "reviewed employee/application productivity aggregates"
+      ],
+      "excluded": [
+        "actual screenshots",
+        "image contents",
+        "private window text",
+        "unreviewed URL/title details"
+      ],
+      "remaining": [
+        "Review canonical activity aggregation and inactivity meaning",
+        "Test viewer and subject seat revocation",
+        "Do not infer attendance or booked hours from tracked activity"
+      ]
+    },
+    {
+      "subscription_key": "kiosk",
+      "status": "not_yet_implemented",
+      "current_coverage": [],
+      "datasets": [],
+      "tables_for_next_review": [
+        "kiosk_operator_licenses",
+        "kiosk_terminals",
+        "kiosk_devices",
+        "kiosk_employee_access",
+        "attendance_observations"
+      ],
+      "sources": [
+        "app/Controllers/Admin/KioskManagementController.php"
+      ],
+      "access": "Existing KIOSK MANAGEMENT permission and device/operator license rules. Do not apply employee-seat assumptions to a device subscription.",
+      "next_reports": [
+        "terminal/device status",
+        "last seen and device counts"
+      ],
+      "excluded": [
+        "face templates",
+        "PINs",
+        "QR secrets",
+        "device credentials",
+        "enrollment tokens"
+      ],
+      "remaining": [
+        "Verify controller-specific record visibility",
+        "Preserve the existing 300-second online heartbeat definition",
+        "Implement read-only device metadata and isolation tests"
+      ]
+    },
+    {
+      "subscription_key": "biometric_device",
+      "status": "not_yet_implemented",
+      "current_coverage": [],
+      "datasets": [],
+      "tables_for_next_review": [
+        "biometric_devices"
+      ],
+      "sources": [
+        "app/Controllers/Admin/BiometricDeviceController.php"
+      ],
+      "access": "Existing BIOMETRIC DEVICES permission and separate biometric_device subscription/device license rules. Office joins must remain tenant-bound.",
+      "next_reports": [
+        "device counts/status",
+        "last seen and office-wise devices"
+      ],
+      "excluded": [
+        "fingerprint/face templates",
+        "device passwords",
+        "external employee PINs",
+        "credential mappings",
+        "device command execution"
+      ],
+      "remaining": [
+        "Review exact allowed fields and heartbeat rules",
+        "Implement read-only catalogue and device license tests"
+      ]
+    },
+    {
+      "subscription_key": "payroll",
+      "status": "deferred_for_separate_privacy_review",
+      "current_coverage": [],
+      "datasets": [],
+      "tables_for_next_review": [
+        "pay_runs",
+        "pay_attendance_snapshots"
+      ],
+      "sources": [
+        "app/Services/Payroll/PayrollPrivacyService.php"
+      ],
+      "access": "No payroll data is currently made available through chat. Any future nonfinancial operational metadata must retain subscription and existing payroll permissions.",
+      "candidate_reports_only": [
+        "pay-run processing status",
+        "nonfinancial completion counts"
+      ],
+      "excluded": [
+        "salary",
+        "compensation",
+        "payslips",
+        "deduction amounts",
+        "bank details",
+        "tax identifiers",
+        "salary structures"
+      ],
+      "remaining": [
+        "Review safe operational metadata separately",
+        "Prevent aggregation/filtering from disclosing financial values",
+        "Keep all monetary payroll reporting unavailable"
+      ]
+    }
+  ],
+  "delivery_order": [
+    "Audit and stabilize existing approved readers",
+    "Initial assets inventory and custody reporting",
+    "LMS ownership-aware lead and followup reporting",
+    "Field sales and adaptive tracking summaries",
+    "Screenshot activity and device metadata",
+    "Separate review of nonfinancial payroll operational metadata"
+  ],
+  "release_gates": [
+    "Module and subject entitlement deny tests, including revoked access and stale saved reports",
+    "Employee ownership and cross-company related-record isolation",
+    "No sensitive fields in details, filters, groups, sorts, charts or exports",
+    "Canonical calculation comparison with existing reports",
+    "Private Excel/PDF and complete-result charts on Web and App",
+    "Measured staging concurrency, query plans/indexes and timeout behavior",
+    "Production configuration and process supervision verified before deployment"
+  ]
+}

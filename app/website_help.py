@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from pydantic import Field, ValidationError
 
 from app.schemas import StrictModel
-from app.task_report import AssistantReply
+from app.reply import AssistantReply
 
 
 INSTRUCTION = re.compile(
@@ -85,7 +85,7 @@ async def refresh_help_history(rows, identity, backend):
     checked = {}
     messages = []
     for row in rows:
-        context = json.loads(row.get('query_context') or '{}')
+        context = json.loads(row.get('query_context') or '{}') or {}
         if row['role'] == 'assistant' and context.get('kind') == 'website_help' and context.get('topic_id'):
             topic = (context['topic_id'], context.get('help_platform', 'web'))
             if topic not in checked:

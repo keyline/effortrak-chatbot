@@ -1,8 +1,8 @@
 import pytest
 
 from app.product_help import PRODUCT_OVERVIEW, product_help
-from tests.test_backend import backend, headers
-from tests.test_semantic_query import enable, request
+from tests.query_support import backend, headers
+from tests.query_support import enable, request
 
 
 @pytest.mark.parametrize('message', [
@@ -31,9 +31,8 @@ def test_product_match_does_not_swallow_other_requests(message):
 @pytest.mark.parametrize('platform', ['web', 'mobile'])
 def test_product_help_is_local_and_clears_employee_context(backend, platform):
     client, state = backend
-    create = enable(client, state, [request(action='booked_time', start_date=None, end_date=None),
-        request(action='attendance', subject='unspecified', employee_name=None,
-            start_date=None, end_date=None, period_kind='none')])
+    create = enable(client, state, [request(action='clarify', plan=None, clarification='period'),
+        request(action='clarify', plan=None, clarification='subject')])
 
     def send(message, conversation_id=None):
         response = client.post('/v1/chat', headers=headers(), json={
@@ -54,13 +53,13 @@ def test_product_help_is_local_and_clears_employee_context(backend, platform):
     assert more['reply'] == PRODUCT_OVERVIEW
     assert create.await_count == 1
     fresh = send('Show attendance', first['conversation_id'])
-    assert 'Whose records' in fresh['reply']
+    assert 'your own records' in fresh['reply']
 
 
 def test_semantic_paraphrase_uses_reviewed_answer_without_inheriting_person(backend):
     client, state = backend
-    create = enable(client, state, [request(action='booked_time', start_date=None, end_date=None),
-        request(action='product_overview', use_previous=True)])
+    create = enable(client, state, [request(action='clarify', plan=None, clarification='period'),
+        request(action='product_overview', plan=None)])
     first = client.post('/v1/chat', headers=headers(), json={'message': 'Show Joydeep booked effort'})
     response = client.post('/v1/chat', headers=headers(), json={
         'message': 'Could you outline the purpose of this platform?',

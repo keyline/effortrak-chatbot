@@ -7,8 +7,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.website_help import website_help, refresh_help_history
-from tests.test_backend import backend, headers
-from tests.test_semantic_query import enable
+from tests.query_support import backend, headers
+from tests.query_support import enable
 
 
 @pytest.mark.parametrize('question', [

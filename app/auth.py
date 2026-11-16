@@ -17,23 +17,33 @@ class Identity:
     designation: str
     scopes: tuple[str, ...]
     can_export: bool = True
-    data_source: Literal['fictional_sample', 'effortrak_backend'] = 'fictional_sample'
-    policy_version: str = ''
-    credential: str = field(default='', repr=False, compare=False)
-    modules: tuple[str, ...] = ('attendance',)
+    data_source: Literal["fictional_sample", "effortrak_backend"] = "fictional_sample"
+    policy_version: str = ""
+    credential: str = field(default="", repr=False, compare=False)
+    modules: tuple[str, ...] = ("attendance",)
+    report_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def policy_key(self) -> str:
-        return f'{self.data_source}:{self.scopes}:{self.can_export}:{self.policy_version}:{self.modules}'
+        reports = sorted(
+            (key, tuple(value)) for key, value in self.report_scopes.items()
+        )
+        return f"{self.data_source}:{self.scopes}:{self.can_export}:{self.policy_version}:{self.modules}:{reports}"
 
 
 # These credentials represent fictional accounts; never use them with live data.
 DEMO_ACCOUNTS = {
-    'demo-company-a-employee': Identity(1, 101, 'Asha Demo', 'Employee', ('self',)),
-    'demo-company-a-manager': Identity(1, 100, 'Mira Demo', 'Manager', ('self', 'team')),
-    'demo-company-a-admin': Identity(1, 103, 'Arun Demo', 'Company admin', ('self', 'team', 'company')),
-    'demo-company-b-employee': Identity(2, 201, 'Ben Demo', 'Employee', ('self',)),
-    'demo-company-a-no-export': Identity(1, 101, 'Asha Demo', 'Employee', ('self',), False),
+    "demo-company-a-employee": Identity(1, 101, "Asha Demo", "Employee", ("self",)),
+    "demo-company-a-manager": Identity(
+        1, 100, "Mira Demo", "Manager", ("self",)
+    ),
+    "demo-company-a-admin": Identity(
+        1, 103, "Arun Demo", "ADMIN", ("self", "company")
+    ),
+    "demo-company-b-employee": Identity(2, 201, "Ben Demo", "Employee", ("self",)),
+    "demo-company-a-no-export": Identity(
+        1, 101, "Asha Demo", "Employee", ("self",), False
+    ),
 }
 
 bearer = HTTPBearer(auto_error=False)
@@ -46,30 +56,67 @@ async def authenticate(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer),
 ) -> Identity:
     config = request.app.state.config
-    if config.data_mode == 'backend':
+    if config.data_mode == "backend":
         secret = config.ai_service_secret.get_secret_value()
-        if not credentials or not hmac.compare_digest(request.headers.get('X-AI-Service-Key', ''), secret):
-            logger.warning('AI delegation rejected: missing credentials or service-key mismatch')
-            raise HTTPException(401, 'Backend mode requires authenticated CodeIgniter delegation.')
+        if not credentials or not hmac.compare_digest(
+            request.headers.get("X-AI-Service-Key", ""), secret
+        ):
+            logger.warning(
+                "AI delegation rejected: missing credentials or service-key mismatch"
+            )
+            raise HTTPException(
+                401, "Backend mode requires authenticated CodeIgniter delegation."
+            )
         token = credentials.credentials
         try:
-            claims = jwt.decode(token, secret, algorithms=['HS256'], issuer='effortrak', audience='effortrak-ai',
-                                leeway=DELEGATION_CLOCK_SKEW_SECONDS,
-                                options={'require': ['exp', 'iat', 'iss', 'aud', 'sub', 'jti', 'company_id', 'purpose']})
-            if (claims['purpose'] != 'attendance-chat' or not claims['sub'].isdigit()
-                    or int(claims['sub']) <= 0 or type(claims['company_id']) is not int or claims['company_id'] <= 0
-                    or type(claims['iat']) is not int or type(claims['exp']) is not int
-                    or not 0 < claims['exp'] - claims['iat'] <= 120):
-                raise ValueError('Invalid identity claims')
+            claims = jwt.decode(
+                token,
+                secret,
+                algorithms=["HS256"],
+                issuer="effortrak",
+                audience="effortrak-ai",
+                leeway=DELEGATION_CLOCK_SKEW_SECONDS,
+                options={
+                    "require": [
+                        "exp",
+                        "iat",
+                        "iss",
+                        "aud",
+                        "sub",
+                        "jti",
+                        "company_id",
+                        "purpose",
+                    ]
+                },
+            )
+            if (
+                claims["purpose"] != "attendance-chat"
+                or not claims["sub"].isdigit()
+                or int(claims["sub"]) <= 0
+                or type(claims["company_id"]) is not int
+                or claims["company_id"] <= 0
+                or type(claims["iat"]) is not int
+                or type(claims["exp"]) is not int
+                or not 0 < claims["exp"] - claims["iat"] <= 120
+            ):
+                raise ValueError("Invalid identity claims")
             # Accommodate a slightly fast issuer without extending token expiry.
-            if claims['exp'] <= time.time():
-                raise jwt.ExpiredSignatureError('Expired delegated credential')
+            if claims["exp"] <= time.time():
+                raise jwt.ExpiredSignatureError("Expired delegated credential")
         except (jwt.PyJWTError, ValueError, TypeError, AttributeError) as exc:
             # Exception classes identify failures without logging credentials or claims.
-            logger.warning('AI delegation JWT rejected: %s', type(exc).__name__)
-            raise HTTPException(401, 'Invalid or expired delegated credential.') from None
-        return await request.app.state.backend.identity(token, claims['company_id'], int(claims['sub']))
+            logger.warning("AI delegation JWT rejected: %s", type(exc).__name__)
+            raise HTTPException(
+                401, "Invalid or expired delegated credential."
+            ) from None
+        return await request.app.state.backend.identity(
+            token, claims["company_id"], int(claims["sub"])
+        )
     identity = DEMO_ACCOUNTS.get(credentials.credentials) if credentials else None
     if identity is None:
-        raise HTTPException(401, 'Invalid or missing demo bearer token.', headers={'WWW-Authenticate': 'Bearer'})
+        raise HTTPException(
+            401,
+            "Invalid or missing demo bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return identity

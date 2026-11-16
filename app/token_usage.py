@@ -5,12 +5,11 @@ import json
 import logging
 import secrets
 import sqlite3
-from contextlib import suppress
+from contextlib import closing, contextmanager, suppress
 from contextvars import ContextVar
 from uuid import uuid4
 
 from fastapi import HTTPException
-
 
 conversation_context = ContextVar('usage_conversation', default=None)
 log = logging.getLogger(__name__)
@@ -25,11 +24,14 @@ class TokenMeter:
             db.execute('''CREATE TABLE IF NOT EXISTS ai_usage_outbox (
                 id TEXT PRIMARY KEY, reservation TEXT NOT NULL, settlement TEXT,
                 delivered INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)''')
+            db.execute('CREATE INDEX IF NOT EXISTS ai_usage_outbox_pending ON ai_usage_outbox(delivered, created_at)')
         self.worker = None
         self.flush_lock = asyncio.Lock()
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(self.path, timeout=10)
+        with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+            yield db
 
     def start(self):
         self.worker = asyncio.create_task(self.run())
@@ -44,30 +46,41 @@ class TokenMeter:
 
     async def run(self):
         while True:
-            await self.flush()
+            try:
+                await self.flush()
+            except Exception as exc:  # noqa: BLE001 - accounting must resume after storage recovers
+                log.warning('AI usage storage retry: %s', type(exc).__name__)
             await asyncio.sleep(30)
+
+    def pending(self, identifier=None):
+        with self.connect() as db:
+            if identifier is None:
+                # Backend accounting is authoritative; never prune undelivered receipts.
+                db.execute("DELETE FROM ai_usage_outbox WHERE delivered=1 AND created_at < datetime('now', '-7 days')")
+            return db.execute('SELECT id, settlement FROM ai_usage_outbox WHERE delivered=0 AND settlement IS NOT NULL'
+                              + (' AND id=?' if identifier else '') + ' ORDER BY created_at LIMIT 20',
+                              (identifier,) if identifier else ()).fetchall()
+
+    def delivered(self, identifier):
+        with self.connect() as db:
+            db.execute('UPDATE ai_usage_outbox SET delivered=1 WHERE id=?', (identifier,))
 
     async def flush(self, identifier=None):
         if self.flush_lock.locked():
             return
         async with self.flush_lock:
-            with self.connect() as db:
-                rows = db.execute('SELECT id, settlement FROM ai_usage_outbox WHERE delivered=0 AND settlement IS NOT NULL'
-                                  + (' AND id=?' if identifier else '') + ' ORDER BY created_at LIMIT 20',
-                                  (identifier,) if identifier else ()).fetchall()
+            rows = await asyncio.to_thread(self.pending, identifier)
             for identifier, payload in rows:
                 try:
                     await self.backend.call('token-settle', '', json.loads(payload))
                 except Exception as exc:
                     if isinstance(exc, HTTPException) and exc.status_code == 404 and json.loads(payload)['state'] == 'cancelled':
-                        with self.connect() as db:
-                            db.execute('UPDATE ai_usage_outbox SET delivered=1 WHERE id=?', (identifier,))
+                        await asyncio.to_thread(self.delivered, identifier)
                         continue
                     # Do not log receipts, JWTs, provider bodies or employee metadata.
                     log.warning('AI usage delivery pending: %s', type(exc).__name__)
                     continue
-                with self.connect() as db:
-                    db.execute('UPDATE ai_usage_outbox SET delivered=1 WHERE id=?', (identifier,))
+                await asyncio.to_thread(self.delivered, identifier)
 
     def save(self, identifier, settlement):
         with self.connect() as db:
@@ -75,7 +88,9 @@ class TokenMeter:
 
     async def create(self, client, identity, operation, **kwargs):
         # Use the provider's exact count for the same stateless input/tools/instructions.
-        count_args = {key: value for key, value in kwargs.items() if key not in {'max_output_tokens', 'store'}}
+        # Sampling changes generation, not the serialized input. The provider's
+        # input-count endpoint does not accept temperature.
+        count_args = {key: value for key, value in kwargs.items() if key not in {'max_output_tokens', 'store', 'temperature'}}
         counted = await client.responses.input_tokens.count(**count_args)
         inputs = counted.input_tokens
         output_limit = kwargs.get('max_output_tokens')

@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     chat_mode: Literal['demo', 'openai'] = 'demo'
     openai_api_key: SecretStr = SecretStr('')
     openai_model: str = ''
-    semantic_questions: bool = False
     ai_token_metering_enabled: bool = False
     ai_help_llm_fallback_enabled: bool = False
     ai_help_followups_enabled: bool = False
@@ -24,9 +23,20 @@ class Settings(BaseSettings):
     data_mode: Literal['sample', 'backend'] = 'sample'
     backend_url: str = ''
     ai_service_secret: SecretStr = SecretStr('')
+    max_concurrent_chats: int = Field(default=8, ge=1, le=128)
+    max_export_workers: int = Field(default=2, ge=1, le=8)
+    report_ttl_seconds: int = Field(default=86400, ge=300, le=604800)
+    conversation_database_url: SecretStr = SecretStr('')
+    conversation_retention_days: int = Field(default=30, ge=1, le=365)
+    max_company_concurrent_chats: int = Field(default=4, ge=1, le=32)
+    background_export_rows: int = Field(default=200, ge=0, le=5000)
+    run_export_workers: bool = True
 
     @model_validator(mode='after')
     def backend_configuration(self):
+        storage = self.conversation_database_url.get_secret_value()
+        if storage and not storage.startswith('postgresql+psycopg://'):
+            raise ValueError('Shared conversation storage requires a postgresql+psycopg URL for a separate AI metadata database.')
         if self.data_mode == 'backend':
             if len(self.ai_service_secret.get_secret_value()) < 32:
                 raise ValueError('Backend mode requires an AI_SERVICE_SECRET of at least 32 characters.')

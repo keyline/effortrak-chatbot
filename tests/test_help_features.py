@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from app.help_features import classify_guide, followup_suggestions
 from app.website_help import website_help
 from tests.test_token_usage import setup, rows
-from tests.test_backend import backend, headers
+from tests.query_support import backend, headers
 
 
 def response(choice=None, **changes):

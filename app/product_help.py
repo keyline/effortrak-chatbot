@@ -2,7 +2,7 @@
 
 import re
 
-from app.task_report import AssistantReply
+from app.reply import AssistantReply
 
 
 PRODUCT_OVERVIEW = (

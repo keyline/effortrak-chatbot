@@ -4,12 +4,11 @@ import sqlite3
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, Mock
 
-import pytest
 import httpx
+import pytest
 from fastapi import HTTPException
 
 from app.token_usage import TokenMeter
-from tests.test_backend import backend, headers
 
 
 @pytest.mark.parametrize(('token', 'authorization'), [('', None), ('employee-jwt', 'Bearer employee-jwt')])
@@ -85,6 +84,18 @@ def test_quota_failure_never_calls_model(tmp_path):
     assert json.loads(rows(meter)[0][1])['state'] == 'cancelled'
 
 
+def test_sampling_is_only_sent_to_generation_and_actual_usage_still_settles(tmp_path):
+    meter, client, identity, calls = setup(tmp_path)
+    asyncio.run(meter.create(
+        client, identity, 'nl_sql_interpretation', model='gpt-4.1-mini',
+        input='Question', tools=[], max_output_tokens=100, temperature=0,
+    ))
+    assert 'temperature' not in client.responses.input_tokens.count.call_args.kwargs
+    assert client.responses.create.call_args.kwargs['temperature'] == 0
+    assert calls[0][2]['tokens'] == 140
+    assert calls[1][2]['total_tokens'] == 50
+
+
 def test_delivery_retries_survive_restart_without_repeat_model_call(tmp_path):
     meter, client, identity, calls = setup(tmp_path)
     original = meter.backend.call.side_effect
@@ -154,58 +165,29 @@ def test_invalid_preflight_never_reserves_or_generates(tmp_path):
     client.responses.create.assert_not_awaited()
 
 
-def test_semantic_chat_wiring_records_before_bad_model_output(tmp_path, backend):
-    from tests.test_semantic_query import enable, request
-    client, state = backend
-    mock = enable(client, state, [request(action='employee_count', subject='company', employee_name=None,
-                                         start_date=None, end_date=None, period_kind='none')])
-    service = client.app.state.chat
-    service.client.responses.input_tokens = NS(count=AsyncMock(return_value=NS(input_tokens=40)))
-    service.client.with_options = Mock(return_value=service.client)
-    mock.side_effect = None
-    mock.return_value = NS(id='resp_bad_parse', status='completed', usage=NS(input_tokens=30, output_tokens=20,
-        total_tokens=50, input_tokens_details=NS(cached_tokens=10)),
-        output=[NS(type='function_call', name='interpret_question', arguments='not valid JSON')])
-    original = service.backend.call
-    accounting = []
-
-    async def call(endpoint, token, body=None):
-        if endpoint == 'token-reserve':
-            accounting.append((endpoint, body))
-            return {'id': body['id']}
-        if endpoint == 'token-settle':
-            accounting.append((endpoint, body))
-            return {'quota': {}}
-        return await original(endpoint, token, body)
-
-    service.backend.call = call
-    service.token_meter = TokenMeter(tmp_path / 'usage.sqlite3', service.backend)
-    result = client.post('/v1/chat', headers=headers(), json={'message': 'How many employees?'})
-    assert result.status_code in (200, 502)
-    assert accounting[0][0] == 'token-reserve'
-    assert accounting[0][1]['conversation_id'] is not None
-    assert accounting[1][0] == 'token-settle'
-    assert accounting[1][1]['total_tokens'] == 50
-    assert json.loads(rows(service.token_meter)[0][1])['state'] == 'settled'
+def test_pruning_keeps_pending_unknown_and_crashed_usage_and_uses_index(tmp_path):
+    meter, *_ = setup(tmp_path)
+    with meter.connect() as db:
+        for identifier, delivered, settlement, created in [
+            ('old-confirmed', 1, '{}', '2000-01-01'),
+            ('recent-confirmed', 1, '{}', None),
+            ('pending', 0, '{"state":"settled"}', '2000-01-01'),
+            ('unknown', 0, '{"state":"unknown"}', '2000-01-01'),
+            ('crashed', 0, None, '2000-01-01'),
+        ]:
+            db.execute("INSERT INTO ai_usage_outbox(id,reservation,settlement,delivered,created_at) VALUES (?, '{}', ?, ?, COALESCE(?, CURRENT_TIMESTAMP))",
+                       (identifier, settlement, delivered, created))
+    assert {row[0] for row in meter.pending()} == {'pending', 'unknown'}
+    with meter.connect() as db:
+        assert {row[0] for row in db.execute('SELECT id FROM ai_usage_outbox')} == {'recent-confirmed', 'pending', 'unknown', 'crashed'}
+        plan = db.execute('EXPLAIN QUERY PLAN SELECT id,settlement FROM ai_usage_outbox WHERE delivered=0 AND settlement IS NOT NULL ORDER BY created_at LIMIT 20').fetchall()
+        assert any('ai_usage_outbox_pending' in row[-1] for row in plan)
 
 
-def test_legacy_tool_loop_reserves_and_records_every_model_call(tmp_path):
-    from app.auth import Identity
-    from app.chat_service import ChatService
-    from app.config import Settings
-    meter, client, _, calls = setup(tmp_path)
-    usage = NS(input_tokens=30, output_tokens=20, total_tokens=50, input_tokens_details=NS(cached_tokens=10))
-    client.responses.create.side_effect = [
-        NS(id='resp_first', usage=usage, output=[NS(type='function_call', name='get_employee_count',
-            call_id='call_count', arguments='{"scope":"self"}')]),
-        NS(id='resp_second', usage=usage, output=[], output_text='Sample employee count: 1.'),
-    ]
-    service = ChatService(Settings(_env_file=None, openai_model='test-model'))
-    service.client = client
-    service.token_meter = meter
-    identity = Identity(1, 1, 'Alice', 'Employee', ('self',))
-    asyncio.run(service.model_reply('How many employees?', [], identity))
-    assert [row[0] for row in calls] == ['token-reserve', 'token-settle', 'token-reserve', 'token-settle']
-    assert calls[0][2]['id'] != calls[2][2]['id']
-    assert calls[0][2]['tokens'] == 1840 and calls[2][2]['tokens'] == 1840
-    assert sum(json.loads(row[1])['total_tokens'] for row in rows(meter)) == 100
+def test_usage_worker_survives_storage_failure_and_accepts_cancellation(tmp_path, monkeypatch):
+    meter, *_ = setup(tmp_path)
+    meter.flush = AsyncMock(side_effect=[sqlite3.OperationalError('temporary failure'), None, asyncio.CancelledError()])
+    monkeypatch.setattr(asyncio, 'sleep', AsyncMock())
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(meter.run())
+    assert meter.flush.await_count == 3

@@ -1,4 +1,8 @@
-# Real Attendance API Setup
+# Legacy prototype attendance setup
+
+This document describes the retired fixed-report prototype. For the current
+NL-to-SQL service, shared storage, export workers and deployment steps, use
+[README.md](README.md). Keep existing deployed access and usage settings.
 
 The backend integration is implemented but disabled by default. Existing `.env`
 files and application data have not been changed. Web and Flutter UI integration
@@ -38,15 +42,16 @@ In the existing role editor, assign the needed **AI ASSISTANT** capabilities:
 | Capability | Permission key | Meaning |
 | --- | --- | --- |
 | AI CHAT | `ai.chat` | Use the chatbot; required for every request |
-| AI TEAM ATTENDANCE | `ai.attendance.team` | Read active direct reports via `manager_1_id` |
+| AI TEAM ATTENDANCE | `ai.attendance.team` | Legacy grant; does not expand chatbot scope |
 | AI ATTENDANCE EXPORT | `ai.attendance.export` | Export attendance already within the user's read scope |
 
 Existing **MY ATTENDANCE** `my-attendance` permits self reads. Existing
 **ATTENDANCE** module access permits company-wide reads, matching the web
-attendance page. Designation is descriptive, not an access grant. Organisation
-SUPER ADMIN retains the existing RBAC bypass, but is still restricted to their
-company and an active attendance license. Team access does not include indirect
-reports. New AI grants should be assigned deliberately, not to all employees.
+attendance page, and company scope additionally requires an authenticated ADMIN or
+SUPER ADMIN role. Every other role is self-only, including managers and team leads.
+Organisation SUPER ADMIN retains the existing RBAC bypass, but remains restricted
+to their own company and an active module license. Team scope is unavailable.
+The same role boundary applies to LMS even with a manage-all-leads grant.
 
 ## 2. Configure Both Services
 
