@@ -115,6 +115,9 @@ unless the user explicitly requests completed sessions or excludes those employe
 For task status filters use the status name; never invent a stored numeric status ID.
 Blank/unclassified is not absence. Effort is actual timesheet bookings, not task estimates.
 Leave request_days is whole-request duration for requests overlapping the selected period.
+For a single requested project, use the project_name or project_id selector rather
+than a project_name filter alone. The backend resolves partial names and asks the
+user to choose among authorized matches. Never invent or silently drop a project.
 Effort/tasks queries start from recorded bookings/assignments. Employees with no source
 rows are not included. Requests specifically to find missing bookings or zero assignments
 are unsupported until a reviewed missing-record dataset exists; do not use HAVING count=0.

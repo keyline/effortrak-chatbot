@@ -142,6 +142,12 @@ period and retains completed (`done`) and cancelled records. Open work needs
 history, recordings, notes, contact details, custom data and financial values are
 outside this initial catalogue. Existing modules and permissions are not modified.
 
+Project matching first tries the exact name, ignoring case and outer spaces.
+Partial names tolerate spacing/punctuation differences and return up to ten choices
+with authorized report records in the selected period. Users confirm an option number,
+full name or project ID; selection preserves the report and makes no extra AI call.
+Backend choice lists stay out of model prompts, and every selected report is authorized again.
+
 To extend a dataset, update the PHP catalogue/compiler, Python plan vocabulary and
 business guidance, then add result/permission tests. Do not add a question regex or
 pass an SQL expression through the API. The compiler independently validates plans.

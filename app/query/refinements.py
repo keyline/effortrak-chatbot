@@ -1,8 +1,38 @@
 """Apply a typed report edit without asking the model to reconstruct its base."""
 
+import re
+
 from fastapi import HTTPException
 
-from app.query.models import QueryPlan
+from app.query.models import Interpretation, QueryPlan
+from app.reply import AssistantReply
+
+
+def choose_project(message, context):
+    choices = context.get("project_choices")
+    if not choices or not context.get("plan"):
+        return None
+    text = message.strip()
+    identifier = re.fullmatch(r"(?:project\s+(?:id\s*)?|id\s*):?\s*(\d+)", text, re.IGNORECASE)
+    option = re.fullmatch(r"(?:option\s+)?([0-9]+)", text, re.IGNORECASE)
+    selected = None
+    if identifier:
+        selected = next((item for item in choices if item["project_id"] == int(identifier[1])), None)
+    elif option:
+        index = int(option[1]) - 1
+        selected = choices[index] if 0 <= index < len(choices) else None
+    else:
+        matches = [item for item in choices if item["project_name"].strip().casefold() == text.casefold()]
+        if len(matches) == 1:
+            selected = matches[0]
+        else:
+            return None
+    if selected is None:
+        return AssistantReply(context["project_choice_message"], status="clarify", query_context=context)
+    plan = QueryPlan.model_validate(context["plan"])
+    # Preserve the scope, employee, period, measures and all unrelated filters.
+    plan = plan.model_copy(update={"project_id": selected["project_id"], "project_name": None, "offset": 0})
+    return Interpretation(action="query", plan=plan, chart=context.get("chart"), export=context.get("export"))
 
 
 def apply_refinement(selection, context, catalogue=None):

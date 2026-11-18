@@ -14,6 +14,7 @@ from app.query import exports
 from app.query.contracts import validate_result
 from app.query.interpreter import interpret
 from app.query.presentation import present
+from app.query.refinements import choose_project
 from app.query.specialized import execute as specialized_query
 from app.reply import AssistantReply, trusted_query
 from app.token_usage import TokenMeter
@@ -77,10 +78,13 @@ class ChatService:
 
     async def reply(self, message, history, identity, client_platform="web"):
         context = trusted_query(history)
-        overview = product_help(message, context)
+        selection = choose_project(message, context)
+        if isinstance(selection, AssistantReply):
+            return selection, [], []
+        overview = product_help(message, context) if selection is None else None
         if overview is not None:
             return overview
-        if self.backend:
+        if self.backend and selection is None:
             help_reply = await website_help(
                 message, context, identity, self.backend, client_platform, self
             )
@@ -101,12 +105,15 @@ class ChatService:
                 "Natural-language reporting requires the configured AI interpreter and authenticated backend.",
             )
         try:
-            selection = await asyncio.wait_for(
-                interpret(
-                    self, message, context, identity, await self.get_catalogue(identity)
-                ),
-                timeout=50,
-            )
+            if selection is None:
+                selection = await asyncio.wait_for(
+                    interpret(
+                        self, message, context, identity, await self.get_catalogue(identity)
+                    ),
+                    timeout=50,
+                )
+            else:
+                await self.get_catalogue(identity)
         except (OpenAIError, TimeoutError):
             raise HTTPException(
                 502, "AI interpretation is unavailable or timed out. Please retry."
@@ -259,6 +266,17 @@ class ChatService:
                     if selection.action == "query"
                     else "specialized": plan.model_dump(mode="json"),
                 }
+                if result.get("project_choices"):
+                    choices = result["project_choices"]
+                    if (selection.action != "query" or plan.dataset not in ("effort", "tasks")
+                        or not isinstance(choices, list) or not 1 <= len(choices) <= 10
+                        or any(not isinstance(item, dict) or set(item) != {"project_id", "project_name"}
+                               or type(item["project_id"]) is not int or item["project_id"] <= 0
+                               or not isinstance(item["project_name"], str) or not 1 <= len(item["project_name"]) <= 500
+                               for item in choices)):
+                        raise HTTPException(502, "The backend returned invalid project choices.")
+                    pending.update(project_choices=choices, project_choice_message=result["message"],
+                                   chart=selection.chart, export=selection.export)
                 return (
                     AssistantReply(
                         result["message"], status="clarify", query_context=pending

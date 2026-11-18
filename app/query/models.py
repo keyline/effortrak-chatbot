@@ -54,6 +54,13 @@ class QueryPlan(StrictModel):
 
     @model_validator(mode="after")
     def reporting_contract(self):
+        if self.project_name and self.dataset in ("effort", "tasks"):
+            # One resolved project selector replaces its duplicate literal name filter.
+            self.filters = [item for item in self.filters if not (
+                item.field == "project_name" and item.operator in ("=", "contains")
+                and isinstance(item.value, str)
+                and item.value.strip().lower() == self.project_name.strip().lower()
+            )]
         if self.dataset in SNAPSHOT_DATASETS:
             if self.start_date or self.end_date:
                 raise ValueError(

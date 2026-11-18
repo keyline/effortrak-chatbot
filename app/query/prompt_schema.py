@@ -31,6 +31,9 @@ def interpretation_prompt_context(context):
     if context.get("kind") != "nl_query":
         return {}
     result = deepcopy(context)
+    # Authorized choice names stay in the chat, never in a provider prompt.
+    result.pop("project_choices", None)
+    result.pop("project_choice_message", None)
     plan = result.get("plan")
     if isinstance(plan, dict):
         result["plan"] = {
