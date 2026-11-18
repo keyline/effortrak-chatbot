@@ -83,7 +83,7 @@ async def authorize(receipt, identity, backend):
         from app.query.specialized import execute
 
         data, _ = await execute(
-            backend, identity, SpecializedPlan.model_validate(source["arguments"])
+            backend, identity, SpecializedPlan.model_validate(source["arguments"]), exporting=True
         )
     if data.get("status") != "answered" or fingerprint(data) != receipt.get(
         "fingerprint"

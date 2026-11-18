@@ -20,6 +20,9 @@ def bind_subject(selection, subject, message, context, identity):
     )
     if subject.kind == "unspecified":
         return Interpretation(action="clarify", clarification="subject")
+    if subject.kind == "self" and not re.search(r"\b(?:my|mine|myself|i)\b", message, re.IGNORECASE):
+        # Recipient-only "me" does not authorize replacing a requested cohort with self.
+        return Interpretation(action="clarify", clarification="subject")
     if subject.kind == "previous":
         if previous is None:
             return Interpretation(action="clarify", clarification="selection")

@@ -97,6 +97,8 @@ calendar service and bounded in-memory relational operations to preserve leave,
 holiday, shift and override rules. It is not a raw-punch approximation.
 Chat presence (`is_present`) requires a punch-in, including late, short and open sessions.
 Lateness (`is_late`) follows the assigned arrival cutoff without requiring punch-out.
+Native attendance and late-arrival reports share the snapshot-aware, second-precise
+reader: saved daily shift settings take precedence over current configuration.
 Calendar labels and payroll classification remain separate; missing punches retain
 leave, holiday and week-off context. Stored Present/Late filters use these same rules.
 
@@ -150,6 +152,9 @@ pass an SQL expression through the API. The compiler independently validates pla
 - Attendance: up to 93 days, 50 employees and 1550 employee-days per query.
 - Charts: complete selections of at most 50 rows, suitable nonnegative numeric measures.
 - Exports: complete results up to 5000 rows and 12 MiB/file; narrow larger selections.
+  Specialized reports page complete reader results in groups of 100; location/visit
+  readers retain their backend pages of 20. Exports start from the first page and
+  revalidate the complete selection on download, regardless of the displayed page.
 - Above `BACKGROUND_EXPORT_ROWS`, export generation enters a durable database queue.
   Each company can have eight queued/running export jobs. Jobs recover after an expired
   worker lease; failed jobs show a useful status and can be requested again.

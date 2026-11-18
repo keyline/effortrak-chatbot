@@ -29,7 +29,7 @@ from tests.query_support import enable, headers, model_envelope, request
 backend = backend_fixture
 
 
-def send(client, message="How many employees?", **values):
+def send(client, message="Count my employee record", **values):
     return client.post(
         "/v1/chat", headers=headers(), json={"message": message, **values}
     )
@@ -167,7 +167,7 @@ def test_revalidate_before_saving_result(backend):
 def test_exports_are_private_expiring_and_reauthorized(backend):
     client, state = backend
     enable(client, state, [request(export="both")])
-    response = send(client, "Count employees and export PDF and Excel")
+    response = send(client, "Count my employee record and export PDF and Excel")
     assert response.status_code == 200, response.text
     artifacts = response.json()["data"]["artifacts"]
     assert {a["format"] for a in artifacts} == {"pdf", "xlsx"}
@@ -185,7 +185,7 @@ def test_exports_are_private_expiring_and_reauthorized(backend):
 def test_changed_report_data_requires_regeneration(backend):
     client, state = backend
     enable(client, state, [request(export="pdf")])
-    artifact = send(client, "Export the count as PDF").json()["data"]["artifacts"][0]
+    artifact = send(client, "Export my employee count as PDF").json()["data"]["artifacts"][0]
     state["employee_count"] = 2
     assert client.get(artifact["download_url"], headers=headers()).status_code == 409
 
@@ -194,20 +194,20 @@ def test_export_denial_does_not_call_backend_report(backend):
     client, state = backend
     state["export"] = False
     enable(client, state, [request(export="xlsx")])
-    assert send(client, "Export Excel").json()["data"]["status"] == "denied"
+    assert send(client, "Export my employee record as Excel").json()["data"]["status"] == "denied"
     assert state["query_bodies"] == []
 
 
 def test_followups_send_selection_but_no_backend_values(backend):
     client, state = backend
-    model = enable(client, state, [request(), request()])
+    model = enable(client, state, [request(), {"subject":{"kind":"previous"}, "selection":request()}])
     identifier = send(client).json()["data"]["conversation_id"]
     send(client, "Show that as a bar chart", conversation_id=identifier)
     context = json.loads(model.call_args.kwargs["input"][0]["content"])[
         "previous_selection"
     ]
     assert context["kind"] == "nl_query"
-    assert context["question"] == "How many employees?"
+    assert context["question"] == "Count my employee record"
     assert "rows" not in context and "tables" not in context
 
 
@@ -385,7 +385,7 @@ def test_restricted_leave_reason_uses_authenticated_role_metadata(role, expected
     result = asyncio.run(
         interpret(
             service,
-            "Show leave with reason",
+            "Show my leave with reason",
             {},
             NS(scopes=["self"], modules=["leave"], designation=role, report_scopes={}),
             catalogue,
@@ -609,7 +609,7 @@ def test_independent_users_can_query_concurrently(backend):
 
     def question(user):
         return client.post(
-            "/v1/chat", headers=headers(user=user), json={"message": "Count employees"}
+            "/v1/chat", headers=headers(user=user), json={"message": "Count my employee record"}
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -709,7 +709,7 @@ def test_durable_export_job_is_owned_and_finishes_after_enqueue(backend):
     client, state = backend
     client.app.state.config.background_export_rows = 0
     enable(client, state, [request(export="xlsx")])
-    response = send(client, "Export the employee count")
+    response = send(client, "Export my employee count")
     assert response.status_code == 200, response.text
     data = response.json()["data"]
     assert data["artifacts"] == [] and data["jobs"][0]["status"] == "queued"

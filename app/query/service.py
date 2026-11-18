@@ -278,13 +278,12 @@ class ChatService:
             reply = present(result, context, selection.chart)
             reports = []
             if selection.export:
-                full = (
-                    await self.backend.call(
+                if selection.action == "query":
+                    full = await self.backend.call(
                         "query", identity.credential, source["arguments"]
                     )
-                    if selection.action == "query"
-                    else result
-                )
+                else:
+                    full, _ = await specialized_query(self.backend, identity, plan, exporting=True)
                 if full.get("status") != "answered":
                     raise HTTPException(
                         409, "Display the reporting selection again before exporting."

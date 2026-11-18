@@ -25,6 +25,43 @@ IDENTITY = Identity(1, 101, "Signed In User", "SUPER ADMIN", ("self", "company")
 NAMED = {"kind": "employee", "employee_name": "Example Employee", "employee_id": None}
 
 
+@pytest.mark.parametrize("message", [
+    "Can you tell me who are present on 07/11/2026",
+    "Can you show me Employee who are present on 07/11/2026",
+    "Give me the staff attendance report",
+])
+def test_recipient_me_cannot_ground_a_self_subject(message):
+    result = bind_subject(Interpretation(action="query", plan={"dataset":"employees"}),
+        EmployeeSubject(kind="self"), message, {}, IDENTITY)
+    assert result.action == "clarify" and result.plan is None
+
+
+def test_new_company_cohort_replaces_previous_personal_selector():
+    result = bind_subject(Interpretation(action="query", plan={"dataset":"employees"}),
+        EmployeeSubject(kind="company"), "Show employees who are present",
+        {"kind":"nl_query", "plan":{"scope":"self", "employee_id":101}}, IDENTITY)
+    assert result.plan.scope == "company" and result.plan.employee_id is None
+
+
+@pytest.mark.parametrize("message", ["Show my attendance", "Which records are mine?", "Show records for myself", "Am I present?"])
+def test_explicit_own_subject_remains_available(message):
+    result = bind_subject(Interpretation(action="query", plan={"dataset":"employees"}),
+        EmployeeSubject(kind="self"), message, {}, IDENTITY)
+    assert result.plan.scope == "self"
+
+
+def test_bad_self_interpretation_never_queries_personal_data_for_employee_cohort(backend):
+    client, state = backend
+    state["scopes"] = ["self", "company"]
+    enable(client, state, [request()])
+    response = client.post("/v1/chat", headers=headers(), json={
+        "message":"Can you show me Employee who are present on 07/11/2026"})
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "clarify"
+    assert response.json()["data"]["tables"] == []
+    assert state["query_bodies"] == []
+
+
 def test_provider_must_extract_subject_before_selecting_a_plan():
     schema = compact_interpretation_schema({})
     assert list(schema["properties"]) == ["subject", "selection"]

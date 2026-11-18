@@ -28,7 +28,8 @@ def present(data, selection, chart_type=None):
         lines.extend(
             f"{col['label']}: {display(rows[0].get(col['key']))}" for col in columns
         )
-    lines.append(f"Showing {len(rows)} of {data['total_rows']} result rows.")
+    qualifier = "at least " if data.get("total_is_exact") is False else ""
+    lines.append(f"Showing {len(rows)} of {qualifier}{data['total_rows']} result rows.")
     if data.get("has_more"):
         lines.append("Ask for the next page to view more records.")
     if data.get("notice"):

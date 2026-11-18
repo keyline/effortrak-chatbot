@@ -149,7 +149,8 @@ def test_history_rechecks_ownership_without_model_calls(backend, dataset, change
     model = enable(
         client,
         state,
-        [request(plan=plan, chart="pie"), request(plan=plan, chart="bar")],
+        [request(plan=plan, chart="pie"),
+         {"subject":{"kind":"previous"}, "selection":request(plan=plan, chart="bar")}],
     )
     answer = client.post(
         "/v1/chat", headers=headers(), json={"message": "Show my authorized records"}

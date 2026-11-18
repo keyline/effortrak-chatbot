@@ -45,6 +45,12 @@ employee remains the subject even when these phrases occur. Use self only for ex
 own-record requests (my/mine/myself), company for company/all-employee requests, previous
 for genuine continuations keeping the earlier employee/cohort, and unspecified when
 unclear. Only employee subjects have employee_name OR employee_id; all others use null.
+An unqualified employee/staff/workforce cohort is a company subject, even without
+the words "all" or "company". A new cohort request replaces a previous personal
+selection. "Who are present/late/absent" asks for an employee cohort, not self.
+Self requires explicit own-record wording (my, mine, myself, I); recipient-only
+"me" never establishes self. Do not narrow a cohort to self when company access
+is unavailable: preserve its company subject so access can be denied correctly.
 If the employee name occurs only in previous_selection, use subject.kind=previous,
 not employee: the application retains the prior employee, including after a denial.
 Never discard a named person in favor of the logged-in user. Subject is required even
@@ -103,6 +109,9 @@ never require mutually exclusive calendar status labels for that continuation.
 No punch-in means is_present=0; preserve leave, holiday and week-off classifications.
 Absent specifically requires is_present=0 and status=Absent, not every missing punch-in.
 Calendar statuses remain available as display labels (including Punchout Pending).
+Requesting a punch-out column does not require a punch-out value. Never add a
+punch-out not_null filter or exclude Late/Punchout Pending from a present cohort
+unless the user explicitly requests completed sessions or excludes those employees.
 For task status filters use the status name; never invent a stored numeric status ID.
 Blank/unclassified is not absence. Effort is actual timesheet bookings, not task estimates.
 Leave request_days is whole-request duration for requests overlapping the selected period.

@@ -1,7 +1,9 @@
 """Existing business readers, selected by meaning rather than question regexes."""
 
+from fastapi import HTTPException
 
-async def execute(backend, identity, plan):
+
+async def execute(backend, identity, plan, *, exporting=False):
     args = plan.model_dump(mode="json")
     common = {
         key: args[key] for key in ("scope", "employee_id", "start_date", "end_date")
@@ -65,7 +67,7 @@ async def execute(backend, identity, plan):
                 plan.kind, plan.kind
             ),
             "latest": plan.kind == "last_location",
-            "page": plan.page,
+            "page": 1 if exporting else plan.page,
         }
         if body["employee_id"] is not None:
             body["employee_name"] = None
@@ -76,7 +78,21 @@ async def execute(backend, identity, plan):
             "status": "clarify",
             "message": data.get("message", "Please narrow the reporting selection."),
         }, None
+    remote_paging = endpoint == "visit-location"
+    if exporting and remote_paging:
+        data = {**data, "rows": list(data.get("rows", []))}
+        while data.get("has_more"):
+            if len(data["rows"]) >= 5000:
+                raise HTTPException(413, "This export is too large. Narrow the report and retry.")
+            body = {**body, "page": body["page"] + 1}
+            following = await backend.call(endpoint, identity.credential, body)
+            if following.get("status") != "answered" or not following.get("rows"):
+                raise HTTPException(409, "Display the reporting selection again before exporting.")
+            data["rows"].extend(following["rows"])
+            data["has_more"] = following.get("has_more", False)
     rows = normalize(plan.kind, data)
+    if exporting and (len(rows) > 5000 or data.get("details_truncated")):
+        raise HTTPException(413, "This export is too large. Narrow the report and retry.")
     fields = list(dict.fromkeys(key for row in rows for key in row))
     columns = [
         {
@@ -99,20 +115,26 @@ async def execute(backend, identity, plan):
         }
         for key in fields
     ]
-    total = data.get("total_count", data.get("matched_count", len(rows)))
-    if not isinstance(total, int) or total < len(rows):
+    page_size = 20 if remote_paging else 100
+    offset = 0 if exporting else (plan.page - 1) * page_size
+    more = bool(data.get("has_more") or data.get("details_truncated"))
+    if remote_paging:
+        total = data.get("total_count", offset + len(rows) + int(more))
+        visible = rows
+    else:
         total = len(rows)
+        visible = rows if exporting else rows[offset:offset + page_size]
+        more = more or offset + len(visible) < total
     result = {
         "status": "answered",
         "dataset": plan.kind,
         "columns": columns,
-        "rows": rows[:100],
+        "rows": visible,
         "total_rows": total,
-        "offset": max(0, (plan.page - 1) * 50),
-        "limit": 100,
-        "has_more": data.get("has_more", False)
-        or data.get("details_truncated", False)
-        or len(rows) > 100,
+        "total_is_exact": not (remote_paging and more and "total_count" not in data),
+        "offset": offset,
+        "limit": 5000 if exporting else page_size,
+        "has_more": more,
         "period": {
             "start": data.get("start_date", common["start_date"]),
             "end": data.get("end_date", common["end_date"]),
