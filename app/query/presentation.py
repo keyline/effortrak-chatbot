@@ -2,6 +2,7 @@
 
 from app.reply import AssistantReply
 from app.schemas import ReportChart
+from app.query.formatting import display, hour_totals
 
 
 def label(value):
@@ -26,8 +27,9 @@ def present(data, selection, chart_type=None):
         col["type"] in ("integer", "number") for col in columns
     ):
         lines.extend(
-            f"{col['label']}: {display(rows[0].get(col['key']))}" for col in columns
+            f"{col['label']}: {display(rows[0].get(col['key']), col.get('unit', ''))}" for col in columns
         )
+    lines.extend(f"{name}: {display(value, 'hours')}" for name, value in hour_totals(data))
     qualifier = "at least " if data.get("total_is_exact") is False else ""
     lines.append(f"Showing {len(rows)} of {qualifier}{data['total_rows']} result rows.")
     if data.get("has_more"):
@@ -48,12 +50,6 @@ def present(data, selection, chart_type=None):
     return AssistantReply(
         "\n".join(lines), query_context=selection, charts=charts, tables=[table]
     )
-
-
-def display(value):
-    if value is None:
-        return "Unavailable"
-    return f"{value:g}" if isinstance(value, float) else str(value)
 
 
 def charts_for(data, kind):

@@ -31,6 +31,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from app.query.formatting import display, hour_totals
 
 REPORT_LOGO = Path(__file__).resolve().parents[1] / "assets" / "effortrak-logo.png"
 
@@ -232,6 +233,14 @@ def workbook(data, charts):
     sheet.row_dimensions[7].height = 28
     for row in data["rows"]:
         sheet.append([row.get(col["key"]) for col in data["columns"]])
+        for index, column in enumerate(data["columns"], 1):
+            cell = sheet.cell(sheet.max_row, index)
+            if column.get("unit") == "hours" and isinstance(cell.value, (int, float)):
+                cell.value /= 24
+                cell.number_format = '[h]"h "mm"m"'
+    data_end = sheet.max_row
+    for name, value in hour_totals(data):
+        sheet.append([f"{name}: {display(value, 'hours')}"])
     # Explicit string types prevent spreadsheet formula execution, including names
     # beginning with =, +, -, @, tabs and carriage returns.
     for cells in sheet:
@@ -239,7 +248,7 @@ def workbook(data, charts):
             if isinstance(cell.value, str):
                 cell.data_type = "s"
     sheet.freeze_panes = "A8"
-    sheet.auto_filter.ref = f"A7:{get_column_letter(width)}{max(7, sheet.max_row)}"
+    sheet.auto_filter.ref = f"A7:{get_column_letter(width)}{max(7, data_end)}"
     sheet.print_title_rows = "1:7"
     sheet.sheet_view.showGridLines = False
     metadata = book.create_sheet("Selection")
@@ -268,12 +277,20 @@ def workbook(data, charts):
             chart_data.append(
                 [name] + [series["values"][i] for series in spec["series"]]
             )
+            if spec["unit"] == "hours":
+                for cell in chart_data[chart_data.max_row][1:]:
+                    if isinstance(cell.value, (int, float)):
+                        cell.value /= 24
+                        cell.number_format = '[h]"h "mm"m"'
         for cells in chart_data:
             for cell in cells:
                 if isinstance(cell.value, str):
                     cell.data_type = "s"
         chart = PieChart() if spec["type"] == "pie" else BarChart()
         chart.title = spec["title"]
+        if spec["unit"] == "hours" and spec["type"] != "pie":
+            chart.y_axis.title = "Hours and minutes"
+            chart.y_axis.numFmt = '[h]"h "mm"m"'
         chart.add_data(
             Reference(
                 chart_data,
@@ -363,17 +380,38 @@ def pdf(data, charts):
         Spacer(1, 16),
     ]
     for spec in charts:
-        drawing = Drawing(720, 230)
+        drawing = Drawing(available_width, 210)
         chart = Pie() if spec["type"] == "pie" else VerticalBarChart()
-        chart.x, chart.y, chart.width, chart.height = 70, 55, 580, 160
+        palette = [colors.HexColor(value) for value in (
+            "#16836b", "#4169d4", "#d48713", "#d34b65", "#8b56b5",
+            "#238b9a", "#63753b", "#b45c2b", "#596374", "#9c4280",
+        )]
         if spec["type"] == "pie":
+            chart.width = chart.height = 170
+            chart.x, chart.y = (available_width - chart.width) / 2, 20
             chart.data = spec["series"][0]["values"]
             chart.labels = spec["labels"]
+            chart.slices.fontName = "Helvetica"
+            chart.slices.fontSize = 8
+            chart.slices.strokeColor = colors.white
+            chart.slices.strokeWidth = 1
+            for index in range(len(spec["labels"])):
+                chart.slices[index].fillColor = palette[index % len(palette)]
         else:
+            chart.x, chart.y, chart.width, chart.height = 65, 45, available_width - 85, 150
             chart.data = [series["values"] for series in spec["series"]]
+            chart.valueAxis.valueMin = 0
             chart.categoryAxis.categoryNames = spec["labels"]
             chart.categoryAxis.labels.angle = 35
             chart.categoryAxis.labels.fontSize = 7
+            chart.bars.strokeColor = None
+            for series_index, series in enumerate(spec["series"]):
+                chart.bars[series_index].fillColor = palette[series_index % len(palette)]
+                if len(spec["series"]) == 1:
+                    for index in range(len(series["values"])):
+                        chart.bars[(series_index, index)].fillColor = palette[index % len(palette)]
+            if spec["unit"] == "hours":
+                chart.valueAxis.labelTextFormat = lambda value: display(value, "hours")
         drawing.add(chart)
         story.extend([Paragraph(escape(spec["title"]), styles["Heading2"]), drawing])
     cells = [
@@ -383,13 +421,7 @@ def pdf(data, charts):
         cells.append(
             [
                 Paragraph(
-                    escape(
-                        str(
-                            row.get(col["key"])
-                            if row.get(col["key"]) is not None
-                            else "Unavailable"
-                        )
-                    ),
+                    escape(display(row.get(col["key"]), col.get("unit", ""))),
                     styles["Normal"],
                 )
                 for col in data["columns"]
@@ -411,6 +443,8 @@ def pdf(data, charts):
             )
         )
         story.append(table)
+    for name, value in hour_totals(data):
+        story.append(Paragraph(escape(f"{name}: {display(value, 'hours')}"), styles["Heading3"]))
     if data.get("notice"):
         story.extend(
             [
