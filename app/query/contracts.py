@@ -45,6 +45,16 @@ def validate_result(plan, data, catalogue, *, exporting=False):
             )
             if resolved.fields != expected:
                 raise ValueError("Changed fields")
+        project = data.get("project")
+        if project is not None and (
+            not isinstance(project, dict)
+            or set(project) != {"project_id", "project_name"}
+            or type(project["project_id"]) is not int
+            or project["project_id"] != resolved.project_id
+            or not isinstance(project["project_name"], str)
+            or not 1 <= len(project["project_name"]) <= 500
+        ):
+            raise ValueError("Invalid project heading")
         outputs = (
             resolved.fields
             if resolved.mode == "details"

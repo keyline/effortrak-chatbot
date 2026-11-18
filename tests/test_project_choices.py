@@ -29,6 +29,27 @@ def pending():
             'project_choice_message': 'Choose a listed project.', 'chart': 'bar', 'export': 'both'}
 
 
+@pytest.mark.parametrize('project', [
+    {'project_id': 7, 'project_name': 'Wrong project'},
+    {'project_id': 9, 'project_name': ''},
+    'Unverified heading',
+])
+def test_project_heading_must_match_resolved_selection(project):
+    from fastapi import HTTPException
+    from app.query.contracts import validate_result
+
+    plan = QueryPlan.model_validate({**PLAN, 'project_name': None, 'project_id': 9, 'offset': 0})
+    data = {
+        'plan': plan.model_dump(mode='json'), 'project': project, 'dataset': 'effort', 'scope': 'self',
+        'columns': [{'key': 'employee_name', 'type': 'string'}, {'key': 'booked_hours', 'type': 'number'}],
+        'rows': [], 'total_rows': 0, 'offset': 0, 'has_more': False,
+        'period': {'start': '2026-09-01', 'end': '2026-09-30'},
+    }
+    with pytest.raises(HTTPException) as error:
+        validate_result(plan, data, {})
+    assert error.value.status_code == 502
+
+
 @pytest.mark.parametrize('operator', ['=', 'contains'])
 def test_duplicate_project_name_constraint_does_not_conflict_with_resolved_id(operator):
     plan = QueryPlan.model_validate({**PLAN, 'filters': [
@@ -84,6 +105,7 @@ def test_chat_project_choice_reauthorizes_and_exports_without_another_model_call
             assert body['plan']['filters'] == [PLAN['filters'][1]]
             return {
                 'status': 'answered', 'dataset': 'effort', 'scope': 'self', 'plan': body['plan'],
+                'project': CHOICES[1],
                 'columns': [{'key': 'employee_name', 'label': 'Employee', 'type': 'string'},
                             {'key': 'booked_hours', 'label': 'Booked hours', 'type': 'number', 'unit': 'hours'}],
                 'rows': [{'employee_name': 'Fictional employee', 'booked_hours': 3}],
@@ -109,6 +131,7 @@ def test_chat_project_choice_reauthorizes_and_exports_without_another_model_call
     assert chosen.status_code == 200, chosen.text
     answer = chosen.json()['data']
     assert answer['tables'][0]['rows'][0]['booked_hours'] == 3
+    assert 'Project: ' + CHOICES[1]['project_name'] in answer['reply']
     assert len(answer['artifacts']) == 2 and len(answer['charts']) == 1
     assert model.await_count == 1
     state['revoke_project'] = True

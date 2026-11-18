@@ -19,6 +19,8 @@ def present(data, selection, chart_type=None):
         {col["key"]: row.get(col["key"]) for col in columns} for row in data["rows"]
     ]
     lines = [title]
+    if data.get("project"):
+        lines.append("Project: " + data["project"]["project_name"])
     if not rows:
         lines.append(
             "No matching records were found for this selection within your access."

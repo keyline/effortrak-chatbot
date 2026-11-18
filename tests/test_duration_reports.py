@@ -53,12 +53,14 @@ def test_totals_and_charts_keep_verified_numbers():
 
 def test_exports_show_durations_and_totals_without_changing_receipt(monkeypatch):
     data = report()
+    data['project'] = {'project_id': 7, 'project_name': 'Fictional Project <A> & B'}
     before = fingerprint(data)
     sheet = load_workbook(BytesIO(workbook(data, []))).active
     assert sheet["B8"].value == timedelta(hours=3.5)
     assert sheet["B9"].value == timedelta(hours=2.25)
     assert sheet["B8"].number_format == '[h]"h "mm"m"'
     assert sheet["A10"].value == "Total Booked Hours: 5h 45m"
+    assert sheet["A6"].value == 'Project: Fictional Project <A> & B'
     assert sheet.auto_filter.ref == "A7:B9"
     # Inspect the actual PDF story while still rendering its charts and pages.
     import app.query.exports as exports
@@ -81,7 +83,10 @@ def test_exports_show_durations_and_totals_without_changing_receipt(monkeypatch)
     assert pdf(data, charts).startswith(b"%PDF")
     assert "2h 15m" in text and "3h 30m" in text
     assert "Total Booked Hours: 5h 45m" in text
+    assert 'Project: Fictional Project <A> & B' in text
     assert fingerprint(data) == before
+    data['project']['project_name'] = 'Renamed project'
+    assert fingerprint(data) != before
 
 
 @pytest.mark.parametrize("kind", ["pie", "bar"])

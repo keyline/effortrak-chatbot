@@ -38,6 +38,8 @@ REPORT_LOGO = Path(__file__).resolve().parents[1] / "assets" / "effortrak-logo.p
 
 def fingerprint(data):
     stable = {key: data[key] for key in ("dataset", "columns", "rows", "total_rows")}
+    if data.get("project"):
+        stable["project"] = data["project"]
     return hashlib.sha256(
         json.dumps(stable, sort_keys=True, allow_nan=False).encode()
     ).hexdigest()
@@ -176,6 +178,7 @@ def report_heading(data):
         "scope": scope,
         "rows": f"{data['total_rows']:,}",
         "generated": generated,
+        "project": (data.get("project") or {}).get("project_name", ""),
     }
 
 
@@ -201,7 +204,7 @@ def workbook(data, charts):
         ["Reporting period: " + heading["period"]],
         [heading["scope"] + "  |  Result rows: " + heading["rows"]],
         ["Generated: " + heading["generated"]],
-        [],
+        ["Project: " + heading["project"]] if heading["project"] else [],
     ]:
         sheet.append(row)
     for number in range(2, 6):
@@ -220,7 +223,10 @@ def workbook(data, charts):
     sheet.row_dimensions[2].height = 34
     for number in (3, 4, 5):
         sheet.row_dimensions[number].height = 22
-    sheet.row_dimensions[6].height = 8
+    sheet.row_dimensions[6].height = 30 if heading["project"] else 8
+    if heading["project"]:
+        sheet.merge_cells(start_row=6, start_column=1, end_row=6, end_column=width)
+        sheet["A6"].alignment = Alignment(wrap_text=True, vertical="center")
     sheet.append([col["label"] for col in data["columns"]])
     for index, col in enumerate(data["columns"], 1):
         cell = sheet.cell(7, index)
@@ -266,6 +272,8 @@ def workbook(data, charts):
     for row in metadata:
         row[0].font = Font(bold=True, color="12364A")
         row[1].alignment = Alignment(wrap_text=True, vertical="top")
+    if heading["project"]:
+        metadata.append(["Project", heading["project"]])
     for cells in metadata:
         for cell in cells:
             if isinstance(cell.value, str):
@@ -379,6 +387,8 @@ def pdf(data, charts):
         summary,
         Spacer(1, 16),
     ]
+    if heading["project"]:
+        story.insert(2, Paragraph("Project: " + escape(heading["project"]), styles["ReportPeriod"]))
     for spec in charts:
         drawing = Drawing(available_width, 210)
         chart = Pie() if spec["type"] == "pie" else VerticalBarChart()
