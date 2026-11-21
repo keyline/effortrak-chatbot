@@ -34,14 +34,14 @@ def test_totals_and_charts_keep_verified_numbers():
     data = report()
     before = deepcopy(data)
     reply = present(data, {}, "bar")
-    assert "Total Booked Hours: 5h 45m" in reply
+    assert "Total booked hours: 5h 45m" in reply
     assert reply.tables[0]["rows"] == data["rows"]
     assert reply.charts[0]["series"][0]["values"] == [3.5, 2.25]
     assert data == before
     assert display(2.25, "records") == "2.25"
     assert display("09:30:00", "hours") == "09:30:00"
     data["has_more"] = True
-    assert "Total Booked Hours (this page): 5h 45m" in present(data, {})
+    assert "Total booked hours (this page): 5h 45m" in present(data, {})
     data["rows"][1]["booked_hours"] = None
     assert hour_totals(data) == [("Total Booked Hours (this page)", None)]
     data["has_more"] = False

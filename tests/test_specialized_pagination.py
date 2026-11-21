@@ -57,7 +57,7 @@ def test_remote_pages_keep_backend_offsets_and_export_from_first_page():
         plan = SpecializedPlan(kind='visits', scope='company', start_date='2026-09-01', end_date='2026-09-30', page=2)
         page, _ = await execute(backend, ACTOR, plan)
         assert page['offset'] == 20 and page['rows'] == rows[20:40]
-        assert 'of at least 41 result rows' in str(present(page, {}))
+        assert 'of at least 41.' in str(present(page, {}))
         full, _ = await execute(backend, ACTOR, plan, exporting=True)
         assert full['rows'] == rows and full['total_rows'] == 45
         assert full['offset'] == 0 and not full['has_more']

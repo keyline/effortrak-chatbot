@@ -85,6 +85,19 @@ no metrics/group_by/having. Where filters use dataset fields; having uses select
 An aggregate grouping identifies categories; its metric measures each category. Counting
 attendance occurrences per employee uses employee_days, not employee_count (which is distinct
 headcount). Preserve the prior occurrence filter when summarizing an existing selection.
+Frequency descriptions such as often, frequently or consistently require occurrence counts
+per employee, ranked highest first. Without a numeric threshold, do not invent a minimum
+or claim the ranking proves a consistency rule. Explicit minimums use having on the count.
+Unquantified frequency must always have having=[]; never assume "more than once".
+When dates or other finer attendance categories are requested alongside an explicit
+employee-period threshold, set having_group_by to the employee grouping: select the
+qualifying employees over the period before grouping their matching records by date.
+Adding date columns to an existing threshold report is a columns refinement, not a
+new threshold on each date. Keep having_group_by null when there is no threshold.
+Do not add distinct employee_count to an employee-wise occurrence report unless requested.
+Chart must be null unless the current request asks for a chart/graph/visualization, or is
+a genuine refinement of the previous chart. A new employee cohort/list question does not
+request a chart simply because an earlier report had one. Lists and tables use chart=null.
 Use plan=null for actions other than query; use specialized=null unless action=specialized.
 Preserve strict comparisons: fewer than is <, more than is >. No arbitrary formulas or joins.
 For time comparisons, after means >, before means <, at or after means >=; do not include
@@ -124,8 +137,11 @@ are unsupported until a reviewed missing-record dataset exists; do not use HAVIN
 Approved leave includes approved and withdraw_requested: use a status in filter with both.
 The in operator accepts at most 20 scalar values. Other filter operators accept a scalar.
 Use prior selection only for a genuine continuation. A new question resets irrelevant filters,
-offset, chart and export. Next page adds previous limit to offset. Do not inherit exports unless
-requested; keep chart style for a continuation. Export "Excel" means xlsx; PDF+Excel means both.
+offset, chart and export. Next page adds previous limit to offset.
+For multi-day attendance details including employee names and another field, limit and offset
+count employees; each employee's complete selected dates stay on one page.
+Do not inherit exports unless requested; keep chart style for a continuation.
+Export "Excel" means xlsx; PDF+Excel means both.
 When previous_selection.plan exists, a continuation changing ONLY aggregation, adding
 columns, ordering, filters, period or page uses action=refine
 and the corresponding refinement operation; plan=null and specialized=null. The application

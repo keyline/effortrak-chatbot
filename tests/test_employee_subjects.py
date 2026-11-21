@@ -539,5 +539,5 @@ def test_attendance_to_punch_place_followup_keeps_selector_and_permission(
         assert data["tables"][0]["rows"][0]["punch_in_address"] == "Example Office"
     else:
         assert not data["tables"] and not data["artifacts"]
-        assert "Attendance location permission" in data["reply"]
+        assert "You don't have access to attendance locations" in data["reply"]
     assert "invalid reporting selection" not in second.text

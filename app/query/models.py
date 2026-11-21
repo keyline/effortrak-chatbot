@@ -47,7 +47,10 @@ class QueryPlan(StrictModel):
     metrics: list[str] = Field(default_factory=list, max_length=10)
     group_by: list[str] = Field(default_factory=list, max_length=10)
     filters: list[Condition] = Field(default_factory=list, max_length=10)
-    having: list[Condition] = Field(default_factory=list, max_length=10)
+    having: list[Condition] = Field(default_factory=list, max_length=10,
+        description="Only explicitly requested numeric aggregate thresholds. Use [] for often/frequently/consistently without a stated minimum.")
+    having_group_by: list[str] | None = Field(default=None, max_length=10,
+        description="Attendance only: grouping at which having selects the cohort before displaying finer groups. Null applies having to the output groups.")
     order_by: list[Sort] = Field(default_factory=list, max_length=4)
     limit: int = Field(default=50, ge=1, le=100)
     offset: int = Field(default=0, ge=0, le=10000)
@@ -80,6 +83,12 @@ class QueryPlan(StrictModel):
             raise ValueError("Aggregate queries require metrics and no detail fields.")
         if len(self.group_by) + len(self.metrics) > 10:
             raise ValueError("Select at most ten output columns.")
+        if self.having_group_by is not None and (
+            self.dataset != "attendance" or self.mode != "aggregate" or not self.having
+            or not set(self.having_group_by) <= set(self.group_by)
+            or len(set(self.having_group_by)) != len(self.having_group_by)
+        ):
+            raise ValueError("Attendance cohort grouping requires aggregate thresholds and a subset of output groups.")
         if self.dataset == "attendance":
             for condition in self.filters:
                 if condition.field not in (
@@ -326,6 +335,7 @@ def interpretation_schema(catalogue):
             }
             props["order_by"]["items"] = sort
             if mode == "details":
+                props["having_group_by"] = {"type": "null"}
                 for key in ("metrics", "group_by", "having"):
                     props[key]["maxItems"] = 0
             else:
@@ -377,6 +387,7 @@ def compact_interpretation_schema(catalogue):
                     else {"type": "string", "format": "date"}
                 )
             if mode == "details":
+                props["having_group_by"] = {"type": "null"}
                 for key in ("metrics", "group_by", "having"):
                     props[key]["maxItems"] = 0
             else:

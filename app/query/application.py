@@ -15,9 +15,11 @@ from app.auth import Identity, authenticate
 from app.backend_client import BackendClient
 from app.config import Settings
 from app.diagnostics import configure_logging
+from app.messages import public_error
 from app.query.exports import authorize
 from app.query.service import ChatService
 from app.query.store import Store
+from app.query.wording import public_chart, public_table, public_text
 from app.schemas import ChatData, ChatRequest, ChatResponse
 from app.token_usage import conversation_context
 
@@ -101,7 +103,7 @@ def create_app(settings=None):
                 status_code=403,
                 content={
                     "success": False,
-                    "message": "Use the authenticated Effortrak gateway.",
+                    "message": "Please open the AI Assistant from Effortrak to continue.",
                 },
             )
         started = time.monotonic()
@@ -117,7 +119,7 @@ def create_app(settings=None):
                 status_code=500,
                 content={
                     "success": False,
-                    "message": "The reporting request could not be completed. Please retry.",
+                    "message": public_error("The reporting request could not be completed. Please retry.", 500),
                 },
             )
         response.headers["Cache-Control"] = "no-store"
@@ -134,7 +136,7 @@ def create_app(settings=None):
     async def error(request, exc):
         return JSONResponse(
             status_code=exc.status_code,
-            content={"success": False, "message": exc.detail},
+            content={"success": False, "message": public_error(exc.detail, exc.status_code)},
             headers=exc.headers,
         )
 
@@ -144,7 +146,7 @@ def create_app(settings=None):
             status_code=422,
             content={
                 "success": False,
-                "message": "Invalid chat request. Check the message and resource ID.",
+                "message": "Please enter a question of up to 4,000 characters and check that the selected chat or report is still available.",
             },
         )
 
@@ -355,10 +357,11 @@ def create_app(settings=None):
                     {
                         **{
                             key: row[key]
-                            for key in ("role", "content", "created_at", "status")
+                            for key in ("role", "created_at", "status")
                         },
-                        "charts": json.loads(row["charts"] or "[]"),
-                        "tables": json.loads(row["tables"] or "[]"),
+                        "content": public_text(row["content"]) if row["role"] == "assistant" else row["content"],
+                        "charts": [public_chart(chart, json.loads(row["tables"] or "[]")) for chart in json.loads(row["charts"] or "[]")],
+                        "tables": [public_table(table) for table in json.loads(row["tables"] or "[]")],
                         "suggestions": [item.model_dump() for item in followups]
                         if index == len(rows) - 1
                         else [],

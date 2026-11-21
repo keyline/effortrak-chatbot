@@ -38,6 +38,6 @@ def interpretation_prompt_context(context):
     if isinstance(plan, dict):
         result["plan"] = {
             key: value for key, value in plan.items()
-            if value is not None and value != []
+            if value is not None and (value != [] or key == "having_group_by")
         }
     return result

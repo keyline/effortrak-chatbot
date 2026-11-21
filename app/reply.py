@@ -1,6 +1,8 @@
 """Presentation metadata stays local; only query selections reach the model."""
 
 import json
+from app.messages import friendly_message
+from app.query.wording import public_text
 
 
 class AssistantReply(str):
@@ -15,7 +17,7 @@ class AssistantReply(str):
         status="answered",
         export_job=None,
     ):
-        reply = super().__new__(cls, content)
+        reply = super().__new__(cls, public_text(friendly_message(content)))
         reply.model_content = (
             model_content or "The backend handled this question locally."
         )

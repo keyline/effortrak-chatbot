@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from app.query.models import SpecializedPlan
 from app.query.presentation import present
 from app.query.specialized import execute
+from app.query.wording import public_table
 
 
 async def refresh_report_history(rows, identity, backend):
@@ -45,7 +46,11 @@ async def refresh_report_history(rows, identity, backend):
                     if exc.status_code not in (403, 404, 409, 410, 413, 422):
                         raise
                     checked[key] = None
-            if checked[key] != tables:
+            current = checked[key]
+            # Titles are presentation text; ownership checks compare the actual results.
+            current = [{**public_table(table), "title": None, "employee_groups": None} for table in current] if current is not None else None
+            saved = [{**public_table(table), "title": None, "employee_groups": None} for table in tables]
+            if current is None or current != saved:
                 # Remove summaries and charts too; both can contain old record values.
                 row = {
                     **row,

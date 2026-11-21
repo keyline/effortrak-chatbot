@@ -59,6 +59,7 @@ def apply_refinement(selection, context, catalogue=None):
             metrics=change.metrics,
             group_by=change.group_by,
             having=[],
+            having_group_by=None,
             order_by=[item.model_dump() for item in change.order_by],
         )
     elif operation == "sort":
@@ -84,6 +85,10 @@ def apply_refinement(selection, context, catalogue=None):
                         "refinement": None,
                     }
                 )
+        if (key == "group_by" and plan["dataset"] == "attendance" and plan["having"]
+            and plan.get("having_group_by") is None and set(change.columns) - set(existing)):
+            # Employee-period thresholds must select employees before splitting their dates.
+            plan["having_group_by"] = existing.copy()
         plan[key] = list(dict.fromkeys(existing + change.columns))
     elif operation == "filter":
         plan["filters"] = [item.model_dump() for item in change.filters]

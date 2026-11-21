@@ -32,6 +32,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 from app.query.formatting import display, hour_totals
+from app.query.wording import public_chart, public_text, report_view
 
 REPORT_LOGO = Path(__file__).resolve().parents[1] / "assets" / "effortrak-logo.png"
 
@@ -40,6 +41,8 @@ def fingerprint(data):
     stable = {key: data[key] for key in ("dataset", "columns", "rows", "total_rows")}
     if data.get("project"):
         stable["project"] = data["project"]
+    if "row_employee_ids" in data:
+        stable["row_employee_ids"] = data["row_employee_ids"]
     return hashlib.sha256(
         json.dumps(stable, sort_keys=True, allow_nan=False).encode()
     ).hexdigest()
@@ -140,6 +143,8 @@ def report_heading(data):
     title = titles.get(
         data["dataset"], data["dataset"].replace("_", " ").title() + " Report"
     )
+    if data.get("display_title"):
+        title = data["display_title"] + " Report"
     period = data.get("period") or {}
 
     def readable(value):
@@ -183,6 +188,8 @@ def report_heading(data):
 
 
 def workbook(data, charts):
+    charts = [public_chart(chart, [data]) for chart in charts]
+    data = report_view(data)
     heading = report_heading(data)
     book = Workbook()
     book.properties.title = heading["title"]
@@ -264,7 +271,7 @@ def workbook(data, charts):
         ("Scope", heading["scope"]),
         ("Generated", heading["generated"]),
         ("Rows", data["total_rows"]),
-        ("Notice", data.get("notice", "")),
+        ("Notice", public_text(data.get("notice", ""))),
     ]:
         metadata.append([key, value])
     metadata.column_dimensions["A"].width = 22
@@ -319,6 +326,8 @@ def workbook(data, charts):
 
 
 def pdf(data, charts):
+    charts = [public_chart(chart, [data]) for chart in charts]
+    data = report_view(data)
     output = BytesIO()
     heading = report_heading(data)
     page_width, page_height = landscape(A4)
@@ -460,7 +469,7 @@ def pdf(data, charts):
             [
                 Spacer(1, 12),
                 Paragraph("Report notes", styles["Heading3"]),
-                Paragraph(escape(data["notice"]), styles["ReportNote"]),
+                Paragraph(escape(public_text(data["notice"])), styles["ReportNote"]),
             ]
         )
 

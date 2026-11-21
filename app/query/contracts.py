@@ -60,6 +60,32 @@ def validate_result(plan, data, catalogue, *, exporting=False):
             if resolved.mode == "details"
             else resolved.group_by + resolved.metrics
         )
+        row_employees = data.get("row_employee_ids")
+        if row_employees is not None and (
+            resolved.mode != "details" or "employee_name" not in outputs
+            or not isinstance(row_employees, list) or len(row_employees) != len(data["rows"])
+            or any(value is not None and (type(value) is not int or value <= 0) for value in row_employees)
+        ):
+            raise ValueError("Invalid employee grouping")
+        employee_page = data.get("employee_pagination")
+        if employee_page is not None:
+            days = (plan.end_date - plan.start_date).days + 1 if plan.start_date and plan.end_date else 0
+            if (exporting or plan.dataset != "attendance" or resolved.mode != "details" or days < 2
+                or len(outputs) < 2 or row_employees is None
+                or any(type(value) is not int for value in row_employees)
+                or not isinstance(employee_page, dict)
+                or set(employee_page) != {"total", "count", "offset", "limit"}
+                or any(type(value) is not int or value < 0 for value in employee_page.values())
+                or employee_page["offset"] != plan.offset or employee_page["limit"] != plan.limit
+                or employee_page["count"] != len(set(row_employees)) or employee_page["count"] > plan.limit
+                or employee_page["total"] < employee_page["count"] or employee_page["total"] > data["total_rows"]
+                or employee_page["count"] != min(plan.limit, max(0, employee_page["total"] - plan.offset))
+                or len(data["rows"]) > min(1550, plan.limit * days)
+                or any(row_employees.count(value) > days for value in set(row_employees))):
+                raise ValueError("Invalid employee pagination")
+        page_count = employee_page["count"] if employee_page is not None else len(data["rows"])
+        page_total = employee_page["total"] if employee_page is not None else data["total_rows"]
+        row_limit = plan.limit * days if employee_page is not None else (5000 if exporting else plan.limit)
         if (
             data["dataset"] != plan.dataset
             or data["scope"] != plan.scope
@@ -74,8 +100,8 @@ def validate_result(plan, data, catalogue, *, exporting=False):
             or data["offset"] != (0 if exporting else plan.offset)
             or type(data["has_more"]) is not bool
             or data["has_more"]
-            != (data["offset"] + len(data["rows"]) < data["total_rows"])
-            or len(data["rows"]) > (5000 if exporting else plan.limit)
+            != (data["offset"] + page_count < page_total)
+            or len(data["rows"]) > row_limit
         ):
             raise ValueError("Invalid pagination")
         for row in data["rows"]:

@@ -121,7 +121,7 @@ def test_help_followup_uses_topic_not_cached_answer():
 def test_partial_deployment_does_not_fall_back_to_paid_model(status):
     backend = SimpleNamespace(call=AsyncMock(side_effect=HTTPException(status, 'Unavailable')))
     result = asyncio.run(website_help('How do I create a task?', {}, SimpleNamespace(credential='test'), backend))
-    assert 'currently unavailable' in result[0]
+    assert 'temporarily unavailable' in result[0]
 
 
 def test_invalid_backend_help_response_is_rejected():

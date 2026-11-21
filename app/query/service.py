@@ -19,13 +19,14 @@ from app.query.specialized import execute as specialized_query
 from app.reply import AssistantReply, trusted_query
 from app.token_usage import TokenMeter
 from app.website_help import website_help
+from app.messages import public_error
 
 CLARIFICATIONS = {
-    "period": "Which date or reporting period should I use?",
+    "period": "Which date or date range would you like me to check?",
     "subject": "Do you mean your own records, a specific employee, or your company?",
     "metric": "Do you mean attendance hours, booked timesheet effort, planned task hours, or tracked productive/idle time?",
-    "report": "Which records or measures would you like to see?",
-    "selection": "Please specify the employee, project, or reporting selection more precisely.",
+    "report": "What information would you like to see?",
+    "selection": "Could you share the employee or project name and the details you'd like to see?",
 }
 
 
@@ -349,7 +350,7 @@ class ChatService:
                         exports.generate, full, full_reply.charts, formats, receipt
                     )
                 reply = AssistantReply(
-                    str(reply) + "\nThe complete authorized report is attached.",
+                    str(reply) + "\nYour report is ready to download.",
                     query_context=context,
                     charts=reply.charts,
                     tables=reply.tables,
@@ -372,7 +373,7 @@ class ChatService:
                 }
                 return (
                     AssistantReply(
-                        str(exc.detail),
+                        public_error(exc.detail, exc.status_code),
                         status="denied" if exc.status_code == 403 else "clarify",
                         query_context=pending,
                     ),

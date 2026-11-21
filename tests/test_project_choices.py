@@ -131,7 +131,7 @@ def test_chat_project_choice_reauthorizes_and_exports_without_another_model_call
     assert chosen.status_code == 200, chosen.text
     answer = chosen.json()['data']
     assert answer['tables'][0]['rows'][0]['booked_hours'] == 3
-    assert 'Project: ' + CHOICES[1]['project_name'] in answer['reply']
+    assert 'for ' + CHOICES[1]['project_name'] in answer['reply']
     assert len(answer['artifacts']) == 2 and len(answer['charts']) == 1
     assert model.await_count == 1
     state['revoke_project'] = True

@@ -117,7 +117,7 @@ def test_backend_permission_denial_becomes_proper_reply(backend):
     enable(client, state, [request()])
     response = send(client)
     assert response.json()["data"]["status"] == "denied"
-    assert "permission" in response.json()["data"]["reply"]
+    assert "You don't have access to this report" in response.json()["data"]["reply"]
 
 
 def test_cross_company_and_cross_user_history_are_private(backend):
