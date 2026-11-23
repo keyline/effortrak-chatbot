@@ -60,9 +60,11 @@ def validate_result(plan, data, catalogue, *, exporting=False):
             if resolved.mode == "details"
             else resolved.group_by + resolved.metrics
         )
+        daily_employee_summary = (resolved.dataset == 'attendance' and resolved.mode == 'aggregate'
+                                  and {'employee_name', 'date'} <= set(resolved.group_by))
         row_employees = data.get("row_employee_ids")
         if row_employees is not None and (
-            resolved.mode != "details" or "employee_name" not in outputs
+            (resolved.mode != "details" and not daily_employee_summary) or "employee_name" not in outputs
             or not isinstance(row_employees, list) or len(row_employees) != len(data["rows"])
             or any(value is not None and (type(value) is not int or value <= 0) for value in row_employees)
         ):
@@ -70,7 +72,7 @@ def validate_result(plan, data, catalogue, *, exporting=False):
         employee_page = data.get("employee_pagination")
         if employee_page is not None:
             days = (plan.end_date - plan.start_date).days + 1 if plan.start_date and plan.end_date else 0
-            if (exporting or plan.dataset != "attendance" or resolved.mode != "details" or days < 2
+            if (exporting or plan.dataset != "attendance" or (resolved.mode != "details" and not daily_employee_summary) or days < 2
                 or len(outputs) < 2 or row_employees is None
                 or any(type(value) is not int for value in row_employees)
                 or not isinstance(employee_page, dict)
@@ -80,7 +82,7 @@ def validate_result(plan, data, catalogue, *, exporting=False):
                 or employee_page["count"] != len(set(row_employees)) or employee_page["count"] > plan.limit
                 or employee_page["total"] < employee_page["count"] or employee_page["total"] > data["total_rows"]
                 or employee_page["count"] != min(plan.limit, max(0, employee_page["total"] - plan.offset))
-                or len(data["rows"]) > min(1550, plan.limit * days)
+                or len(data["rows"]) > plan.limit * days
                 or any(row_employees.count(value) > days for value in set(row_employees))):
                 raise ValueError("Invalid employee pagination")
         page_count = employee_page["count"] if employee_page is not None else len(data["rows"])

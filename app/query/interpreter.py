@@ -79,7 +79,16 @@ Contact details, free-text notes, closed/lost reasons, custom data, deal values 
 call recordings are not available in these reports. Never infer conversion from a
 stage name; use recorded converted_date, or stage_won for current won-stage counts.
 Hours alone require clarification: attendance_hours, booked_hours, planned_hours and tracked
-productive/idle hours are different. Counts of attendance are employee-days, not headcount.
+productive/idle hours are different. Attendance-day totals differ from distinct employee headcount.
+A plain attendance report is mode=details using the attendance default_fields (including status,
+punch_in and punch_out), unless the user explicitly requests counts, totals, rankings or a chart.
+Do not inherit aggregate mode or employee_days merely because an earlier report counted late days.
+A new attendance report resets that earlier report's metrics and occurrence filters; a genuine
+request to add columns or dates to the earlier counted cohort preserves that cohort and its metrics.
+For total days actually attended use present_days, which sums recorded punch-ins. employee_days
+counts selected calendar rows, including absent, leave and non-working days unless filtered.
+Never treat employee_days=1 as proof of attendance. Use it for status breakdowns or filtered
+occurrences such as late days; headcounts of present employees require is_present=1.
 Default limit=50, offset=0. Aggregate uses metrics and group_by, no fields. Details uses fields,
 no metrics/group_by/having. Where filters use dataset fields; having uses selected metrics.
 An aggregate grouping identifies categories; its metric measures each category. Counting
@@ -121,12 +130,14 @@ are also present. A present cohort followed by late keeps is_present=1 and adds 
 never require mutually exclusive calendar status labels for that continuation.
 No punch-in means is_present=0; preserve leave, holiday and week-off classifications.
 Absent specifically requires is_present=0 and status=Absent, not every missing punch-in.
-Calendar statuses remain available as display labels (including Punchout Pending).
+The reporting status is Present/Late when punch-in exists, regardless of punch-out or completed
+hours. Without punch-in, approved leave, holidays and weekly offs keep separate labels; otherwise
+today and past dates are Absent. Future dates are not classified as absent.
 Requesting a punch-out column does not require a punch-out value. Never add a
-punch-out not_null filter or exclude Late/Punchout Pending from a present cohort
+punch-out not_null filter or exclude late arrivals or missing punch-outs from a present cohort
 unless the user explicitly requests completed sessions or excludes those employees.
 For task status filters use the status name; never invent a stored numeric status ID.
-Blank/unclassified is not absence. Effort is actual timesheet bookings, not task estimates.
+Effort is actual timesheet bookings, not task estimates.
 Leave request_days is whole-request duration for requests overlapping the selected period.
 For a single requested project, use the project_name or project_id selector rather
 than a project_name filter alone. The backend resolves partial names and asks the
@@ -169,6 +180,9 @@ If validation_feedback is supplied, regenerate a valid selection from the origin
 and prior selection. Preserve the requested meaning and access scope; do not drop filters or
 invent a metric to make validation pass. Clarify when a valid selection needs more information.
 Charts require an appropriate metric and grouping; do not invent a metric just to draw a chart.
+For attendance charts without an explicit measure, group by status and count employee_days.
+This shows the distribution of attendance days, not daily hours or individual punch records.
+Explicit requests to chart hours keep attendance_hours as the measure and use aggregate mode.
 If a question cannot be expressed, use unsupported; do not substitute a similar report.
 Keep the native dataset when refining an existing native report; changing aggregation or
 ordering must not reroute it to a specialized report. Simple fixed-time filters and counts

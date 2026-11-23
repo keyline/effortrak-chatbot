@@ -8,6 +8,8 @@ ACCESS_CHANGED = "Your access has changed. Please start a new chat to continue."
 _GROUPS = {
     USAGE_LIMIT: (
         "Company AI token allowance is insufficient for this request. Contact your administrator.",
+        "There aren't enough tokens available for this request. Please contact your administrator for help.",
+        "Your company's AI allowance has been reached. Please contact your administrator.",
     ),
     "Your session has expired. Please sign in again to continue.": (
         "Backend mode requires authenticated CodeIgniter delegation.",

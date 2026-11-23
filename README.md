@@ -154,8 +154,25 @@ pass an SQL expression through the API. The compiler independently validates pla
 
 ## Report and concurrency limits
 
-- Native reporting: up to 366 inclusive days, 100 rows per chat page, offset up to 10000.
-- Attendance: up to 93 days, 50 employees and 1550 employee-days per query.
+Plain attendance requests use detail rows with status and punch times. Present/Late
+requires a punch-in; missing punch-out does not remove presence. Without punch-in,
+leave/holiday/week-off labels remain; other current/past days are Absent. Future
+dates remain unclassified. `present_days` counts actual punch-based employee-days;
+`employee_days` counts selected calendar rows and is displayed as Days covered
+when no attendance-status cohort or breakdown is selected. Adding columns to a
+counted cohort retains that cohort; a new plain report starts with detail rows.
+
+- Native reporting: up to 366 inclusive days, 100 rows per chat page; pagination
+  continues beyond 10,000 records (offset up to 2,147,483,647).
+- Attendance: up to 93 days, with no fixed company employee limit. PHP processes
+  at most 50 employees / 1550 employee-days per batch and uses temporary database
+  tables for complete counts, rankings and cohort thresholds before pagination.
+  Multi-day detail and employee/date aggregate pages keep all selected dates for up to 100 employees together;
+  aggregate and single-day pages return up to 100 rows. Database temporary-table
+  permission and MySQL 8+ / MariaDB 10.2+ window functions are required.
+  Report reads allow up to 60 seconds within the existing 75-second chat deadline;
+  paging bounds the response, while complete-company calculations still depend
+  on database capacity and indexes.
 - Charts: complete selections of at most 50 rows, suitable nonnegative numeric measures.
 - Exports: complete results up to 5000 rows and 12 MiB/file; narrow larger selections.
   Specialized reports page complete reader results in groups of 100; location/visit

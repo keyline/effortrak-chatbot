@@ -1,5 +1,6 @@
 """Render verified results without a second model call or numerical guessing."""
 
+from collections import Counter
 from datetime import date
 
 from app.reply import AssistantReply
@@ -77,7 +78,8 @@ def present(data, selection, chart_type=None):
         lines.append(f"Showing results {data['offset'] + 1} to {data['offset'] + len(rows)} of {qualifier}{data['total_rows']}." + (" Ask for the next page to see more." if data.get("has_more") else ""))
     if any(row.get(col["key"]) is None for row in rows for col in columns if col["type"] in ("integer", "number")):
         lines.append("Some values aren't available, so a complete total may not be possible.")
-    if rows and data["dataset"] == "attendance" and any(col["key"] == "attendance_hours" for col in columns):
+    open_session = any(row.get("punch_in") and "punch_out" in row and not row["punch_out"] for row in data["rows"])
+    if open_session and data["dataset"] == "attendance" and any(col["key"] == "attendance_hours" for col in columns):
         lines.append("Hours may be incomplete when a punch-out is missing.")
     if rows and data["dataset"] == "leave" and any(col["key"] in ("days", "total_days", "leave_days") for col in columns):
         lines.append("Leave-day totals cover each full leave request.")
@@ -101,19 +103,23 @@ def present(data, selection, chart_type=None):
                 break
             group = groups.setdefault(identifier, {"employee_id": identifier, "name": row["employee_name"], "row_indices": []})
             group["row_indices"].append(index)
-        if any(len(group["row_indices"]) > 1 for group in groups.values()):
+        attendance_details = data["dataset"] == "attendance" and {"date", "punch_in"}.issubset(col["key"] for col in columns)
+        if any(len(group["row_indices"]) > 1 for group in groups.values()) or (attendance_details and len(groups) > 1):
             table["employee_groups"] = list(groups.values())
     if employee_page:
         table["employee_pagination"] = employee_page
     if table.get("employee_groups"):
         note = "Hours may be incomplete when a punch-out is missing."
-        if note in lines:
+        has_note = note in lines
+        if has_note:
             lines.remove(note)
-            if employee_page:
-                totals = [f"{name.capitalize()}: {display(value, 'hours')}" for name, value in hour_totals(data)]
-                table["summary"] = "\n".join(totals + [note])
-            else:
-                table["note"] = note
+        if employee_page:
+            totals = [f"{name.capitalize()}: {display(value, 'hours')}" for name, value in hour_totals(data)]
+            summary = totals + ([note] if has_note else [])
+            if summary:
+                table["summary"] = "\n".join(summary)
+        elif has_note:
+            table["note"] = note
     return AssistantReply(
         "\n".join(lines), query_context=selection, charts=charts, tables=[table] if rows else []
     )
@@ -123,11 +129,22 @@ def charts_for(data, kind):
     if not kind:
         return [], ""
     data = report_view(data)
-    if data.get("has_more") or data.get("offset") or len(data["rows"]) > 50:
+    if data.get("has_more") or data.get("offset"):
         return (
             [],
             "To chart the complete result, please group the report or select up to 50 rows.",
         )
+    if (data.get("dataset") == "attendance"
+        and (data.get("plan") or {}).get("mode", "details") == "details"
+        and {"date", "status"}.issubset(col["key"] for col in data["columns"])):
+        # Daily attendance charts count statuses; recorded hours are a separate explicit aggregate.
+        counts = Counter(row.get("status") or "Unclassified" for row in data["rows"])
+        data = {**data, "display_title": "Attendance by status", "columns": [
+            {"key":"status", "label":"Status", "type":"string"},
+            {"key":"employee_days", "label":"Attendance days", "type":"number", "unit":"employee-days"}],
+            "rows": [{"status":status, "employee_days":count} for status, count in counts.items()]}
+    if len(data["rows"]) > 50:
+        return [], "To chart the complete result, please group the report or select up to 50 rows."
     numeric = [
         column
         for column in public_columns(data["columns"])

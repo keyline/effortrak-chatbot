@@ -47,9 +47,9 @@ def test_late_occurrences_have_clear_labels_and_no_redundant_headcount_or_chart_
     ([{'field':'status','operator':'=','value':'Absent'}], 'Days absent','Absent employees'),
     ([{'field':'status','operator':'in','value':['Late']}], 'Days late','Late arrivals'),
     ([{'field':'is_late','operator':'!=','value':0}], 'Days late','Late arrivals'),
-    ([{'field':'is_late','operator':'=','value':0}], 'Attendance days',None),
-    ([{'field':'status','operator':'in','value':['Present','Late']}], 'Attendance days',None),
-    ([], 'Attendance days',None),
+    ([{'field':'is_late','operator':'=','value':0}], 'Days covered',None),
+    ([{'field':'status','operator':'in','value':['Present','Late']}], 'Days covered',None),
+    ([], 'Days covered',None),
 ])
 def test_wording_follows_verified_filters_rather_than_question_phrasing(filters,label,title):
     data = report()

@@ -4,6 +4,7 @@ from app.query.formatting import display
 
 FIELD_LABELS = {
     "is_present": "Present", "is_late": "Late", "is_active": "Active",
+    "present_days": "Days present",
     "stage_won": "Won", "stage_lost": "Lost",
 }
 FIELD_VALUES = {
@@ -42,7 +43,8 @@ def report_view(data):
         "present" if selected("is_present", 1) or selected("status", "Present") else
         "absent" if selected("status", "Absent") else None
     )
-    count_label = {"late":"Days late", "present":"Days present", "absent":"Days absent"}.get(cohort, "Attendance days")
+    count_label = {"late":"Days late", "present":"Days present", "absent":"Days absent"}.get(cohort,
+        "Days" if 'status' in plan.get('group_by', []) else "Days covered")
     columns = [{**col, "label":count_label} if col["key"] == "employee_days" else col for col in columns]
     # Distinct headcount is redundant only when every displayed employee group is exactly one person.
     per_employee = plan.get("mode") == "aggregate" and bool(set(plan.get("group_by", [])) & {"employee_id", "employee_name"})

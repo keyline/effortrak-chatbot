@@ -35,7 +35,8 @@ class QueryPlan(StrictModel):
         "lms_leads",
         "lms_followups",
     ]
-    mode: Literal["details", "aggregate"] = "details"
+    mode: Literal["details", "aggregate"] = Field(default="details",
+        description="Use details for a plain attendance report; aggregate only for requested counts, totals, rankings or charts.")
     scope: Literal["self", "team", "company"] = "self"
     employee_id: int | None = Field(default=None, gt=0)
     employee_name: str | None = Field(default=None, min_length=2, max_length=120)
@@ -53,7 +54,7 @@ class QueryPlan(StrictModel):
         description="Attendance only: grouping at which having selects the cohort before displaying finer groups. Null applies having to the output groups.")
     order_by: list[Sort] = Field(default_factory=list, max_length=4)
     limit: int = Field(default=50, ge=1, le=100)
-    offset: int = Field(default=0, ge=0, le=10000)
+    offset: int = Field(default=0, ge=0, le=2147483647)
 
     @model_validator(mode="after")
     def reporting_contract(self):

@@ -28,6 +28,40 @@ def test_employee_groups_use_ids_and_preserve_only_loaded_page_rows():
     assert data == before
 
 
+def test_single_day_attendance_details_offer_separate_employee_sections():
+    data = detail()
+    data['columns'].extend([
+        dict(key='punch_in', label='Punch In', type='string'),
+        dict(key='punch_out', label='Punch Out', type='string'),
+    ])
+    data['rows'] = [dict(employee_name='Same Name', date='2026-11-01', punch_in=value, punch_out=None)
+                    for value in ['09:00:00', None]]
+    data['row_employee_ids'] = [101, 102]
+    before = deepcopy(data)
+    table = present(data, {}).tables[0]
+    assert table['employee_groups'] == [
+        {'employee_id':101, 'name':'Same Name', 'row_indices':[0]},
+        {'employee_id':102, 'name':'Same Name', 'row_indices':[1]}]
+    assert table['rows'] == data['rows']
+    assert data == before
+
+
+@pytest.mark.parametrize('punches,expected', [
+    ({'punch_in':None, 'punch_out':None}, False),
+    ({'punch_in':'09:00:00', 'punch_out':'17:00:00'}, False),
+    ({'punch_in':'09:00:00', 'punch_out':None}, True),
+    ({'punch_in':'09:00:00'}, False),
+    ({}, False),
+])
+def test_hours_warning_requires_a_recorded_open_session(punches, expected):
+    data = detail()
+    data['columns'].append(dict(key='attendance_hours', label='Attendance Hours', type='number', unit='hours'))
+    data['rows'] = [dict(employee_name='Example', date='2026-11-01', attendance_hours=0, **punches)]
+    data.pop('row_employee_ids')
+    reply = present(data, {})
+    assert ('Hours may be incomplete' in reply) is expected
+
+
 @pytest.mark.parametrize('ids', [None, [101,102,103], [101,None,101], [101,True,101]])
 def test_summary_and_legacy_or_incomplete_metadata_keep_flat_table(ids):
     data = detail()
@@ -104,3 +138,56 @@ def test_invalid_employee_page_cannot_bypass_row_limits(change):
     data['employee_pagination'].update(change)
     with pytest.raises(HTTPException):
         validate_result(plan,data,{})
+
+
+def test_large_company_employee_page_accepts_all_days_beyond_old_workload_cap():
+    plan, data = employee_page(limit=100, offset=10000)
+    employees = range(10001, 10101)
+    data['rows'] = [dict(employee_name=f'Employee {employee}', date=f'day {day}', attendance_hours=1)
+                    for employee in employees for day in range(34)]
+    data['row_employee_ids'] = [employee for employee in employees for day in range(34)]
+    data.update(total_rows=20000*34, has_more=True,
+                employee_pagination=dict(total=20000, count=100, offset=10000, limit=100))
+    validate_result(plan, data, {})
+    table = present(data, {}).tables[0]
+    assert len(table['rows']) == 3400
+    assert len(table['employee_groups']) == 100
+    assert all(len(group['row_indices']) == 34 for group in table['employee_groups'])
+    del data['employee_pagination']
+    with pytest.raises(HTTPException):
+        validate_result(plan, data, {})
+
+
+def test_next_page_can_pass_ten_thousand_without_changing_selection():
+    from app.query.models import Interpretation
+    from app.query.refinements import apply_refinement
+
+    plan, _ = employee_page(limit=100, offset=10000)
+    selection = Interpretation(action='refine', refinement={'operation':'page', 'direction':'next'})
+    next_plan = apply_refinement(selection, {'kind':'nl_query', 'plan':plan.model_dump(mode='json')}).plan
+    assert next_plan.offset == 10100
+    assert next_plan.model_copy(update={'offset':10000}) == plan
+
+
+def test_date_wise_aggregate_uses_employee_sections_and_preserves_counts():
+    plan = QueryPlan(dataset='attendance', mode='aggregate', scope='company',
+        start_date='2026-11-01', end_date='2026-11-21', group_by=['employee_name','date'],
+        metrics=['employee_days'], filters=[{'field':'is_late','operator':'=','value':1}], limit=1)
+    data = dict(dataset='attendance', scope='company', plan=plan.model_dump(mode='json'),
+        period={'start':'2026-11-01','end':'2026-11-21'},
+        columns=[dict(key='employee_name',label='Employee',type='string'),
+                 dict(key='date',label='Date',type='string'),
+                 dict(key='employee_days',label='Employee Days',type='number',unit='employee-days')],
+        rows=[dict(employee_name='Employee A',date=f'2026-11-{day:02}',employee_days=1) for day in [1,2,5]],
+        row_employee_ids=[101,101,101], total_rows=5, offset=0, has_more=True,
+        employee_pagination=dict(total=2,count=1,offset=0,limit=1))
+    validate_result(plan, data, {})
+    reply=present(data,{})
+    table=reply.tables[0]
+    assert table['employee_groups'] == [{'employee_id':101,'name':'Employee A','row_indices':[0,1,2]}]
+    assert table['columns'][-1]['label'] == 'Days late'
+    assert table['rows'] == data['rows']
+    assert 'next page' in reply and 'Showing results' not in reply
+    assert table['employee_pagination']['total'] == 2
+    with pytest.raises(HTTPException):
+        validate_result(plan, data, {}, exporting=True)

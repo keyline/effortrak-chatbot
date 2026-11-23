@@ -62,6 +62,7 @@ def test_own_records_and_material_attendance_caveat_are_clear():
     data['columns'][1]['key'] = 'attendance_hours'
     for row in data['rows']:
         row['attendance_hours'] = row.pop('booked_hours')
+        row.update(punch_in='09:30:00', punch_out=None)
     reply = present(data, {})
     assert reply.startswith("Your attendance")
     assert 'Hours may be incomplete when a punch-out is missing.' in reply

@@ -10,6 +10,9 @@ from app.reply import AssistantReply
 
 @pytest.mark.parametrize('status, original, expected', [
     (429, 'Company AI token allowance is insufficient for this request. Contact your administrator.', USAGE_LIMIT),
+    (429, "There aren't enough tokens available for this request. Please contact your administrator for help.", USAGE_LIMIT),
+    (429, "Your company's AI allowance has been reached. Please contact your administrator.", USAGE_LIMIT),
+    (429, USAGE_LIMIT, USAGE_LIMIT),
     (409, 'Permissions changed. Start a new conversation.', ACCESS_CHANGED),
     (410, 'This report expired. Generate it again.', 'This report has expired. Please generate a new report to download it.'),
     (502, 'The AI returned an invalid reporting selection. Please rephrase it.', "We couldn't understand the report you need. Please describe it another way, including the employee, dates and details you'd like to see."),

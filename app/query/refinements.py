@@ -104,7 +104,7 @@ def apply_refinement(selection, context, catalogue=None):
             if change.direction != "first"
             else 0
         )
-        if plan["offset"] > 10000:
+        if plan["offset"] > 2147483647:
             raise HTTPException(
                 422, "Narrow the reporting selection before requesting more pages."
             )

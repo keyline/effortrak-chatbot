@@ -37,7 +37,9 @@ class BackendClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         try:
-            response = await self.client.post(url, json=body or {}, headers=headers)
+            # Large report batches need more read time; connection/auth calls stay short.
+            response = await self.client.post(url, json=body or {}, headers=headers,
+                                             timeout=httpx.Timeout(60, connect=5) if endpoint == 'query' else 20)
         except httpx.HTTPError:
             raise HTTPException(
                 502, "Effortrak backend is unavailable or timed out."

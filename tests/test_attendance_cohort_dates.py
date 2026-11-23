@@ -97,10 +97,11 @@ def test_chat_followup_uses_real_php_cohort_execution_with_fictional_records(bac
     php_code = r'''require 'tests/bootstrap.php';
         $data=json_decode(stream_get_contents(STDIN),true,512,JSON_THROW_ON_ERROR);
         $plan=App\Services\Ai\Query\Plan::validate($data['plan']);
-        echo json_encode(App\Services\Ai\Query\CanonicalRows::execute($plan,$data['rows']),JSON_THROW_ON_ERROR);'''
+        $db=Config\Database::connect(['DBDriver'=>'SQLite3','database'=>':memory:','DBPrefix'=>'','DBDebug'=>true],false);
+        echo json_encode((new App\Services\Ai\Query\AttendancePages($db))->read($plan,[$data['rows']]),JSON_THROW_ON_ERROR);'''
 
     def result(plan):
-        executed = subprocess.run([php, '-r', php_code], cwd=web,
+        executed = subprocess.run([php, '-d', 'extension=sqlite3', '-r', php_code], cwd=web,
             input=json.dumps({'plan':plan,'rows':rows}), text=True, capture_output=True, check=True)
         data = json.loads(executed.stdout)
         return {**data,'status':'answered','dataset':'attendance','scope':'company','plan':plan,
@@ -118,6 +119,9 @@ def test_chat_followup_uses_real_php_cohort_execution_with_fictional_records(bac
     answer = second.json()['data']
     assert [row['date'] for row in answer['tables'][0]['rows']] == ['2026-10-01','2026-10-02']
     assert {row['employee_name'] for row in answer['tables'][0]['rows']} == {'Example A'}
+    assert answer['tables'][0]['employee_groups'] == [
+        {'employee_id':101,'name':'Example A','row_indices':[0,1]}]
+    assert answer['tables'][0]['employee_pagination']['count'] == 1
     assert 'couldn\'t find' not in answer['reply']
     assert 'Employees are ranked' not in answer['reply']
     assert state['query_bodies'][-1]['plan']['having_group_by'] == ['employee_id','employee_name']
