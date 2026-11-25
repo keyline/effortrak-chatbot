@@ -240,8 +240,59 @@ records, create exports, or post usage against an employee/company account.
 On 2026-11-12, 186 local tests and eight synthetic live interpretation cases passed,
 including employee-wise counts, sorting, effort grouping and sensitive-data denial.
 These checks do not replace validation of actual company report results.
+
+### Prompt efficiency and clarification checks
+
+The shared interpreter keeps all nine supported datasets available. It shares
+identical schema definitions through local references, groups typed vocabulary,
+removes duplicate metadata and uses shorter common instructions. Python and PHP
+validation, permissions and calculations remain authoritative. A completed but
+unusable interpretation asks a clear clarification question after at most one
+validation correction. Provider timeouts/incomplete responses remain service
+errors. A short answer to a pending clarification retains the earlier subject.
+
+On 2026-11-24, the same fictional request measured 8,547 input tokens before and
+6,191 after this change (27.6% less). All 523 regression tests passed. Live
+diagnostics found subject-selection issues; after correcting the shared rules,
+the final acceptance round passed 20/20 cases. The 64 generation calls across
+all diagnostic rounds had a conservative estimated cost of $0.053. This is
+synthetic acceptance evidence, not production sign-off or a guarantee for every
+possible phrasing. Staging still needs real report reconciliation, deployed
+permission checks, load testing, and physical web/mobile acceptance.
+
+The repeatable evaluator uses code-owned metadata and fictional selections only:
+
+```powershell
+# Offline request-size inspection; no provider calls.
+.\.venv\Scripts\python.exe tests/evaluate_prompt_optimization.py
+# Optional exact input-token comparison; no answer generation.
+.\.venv\Scripts\python.exe tests/evaluate_prompt_optimization.py --count-only --baseline-ref 3a0acd19ae75e905d7411758b83077024662f819
+# Paid model checks: run only with explicit approval for the provider charges.
+.\.venv\Scripts\python.exe tests/evaluate_prompt_optimization.py --live --max-usd 0.10 --max-calls 64
+```
+
+The evaluator contains 32 scenarios plus a clarification follow-up. Its live
+budgets apply per run, including validation retries; do not reset the budget
+between diagnostic reruns without new approval. Results are recorded in
+`docs/nl-prompt-verification-2026-11-24.json`.
+
 Official strict function-calling reference:
 https://developers.openai.com/api/docs/guides/function-calling
+
+The subsequent attendance-recency fix passed 571 offline regression tests,
+including the reported wording, stale late-report context, required specialized
+report periods, and web/mobile clarification history. Ambiguous latest-attendance
+requests ask whether the user means a punch-in day or a calendar entry, and for
+a search period. Required specialized periods are validated before backend reads.
+No additional paid model calls or real employee-report checks were run for this fix;
+the earlier token comparison and live acceptance results describe the earlier source.
+
+Employee-count follow-ups now replace inherited employee-name grouping with a
+distinct headcount, retaining authorized scope, dates and filters. Explicit
+breakdowns keep their dimensions; attendance-day totals remain separate.
+Scalar attendance headcounts use a short sentence without a duplicate table,
+and exports label headcounts as employees. The 25 November regression tests
+include list-to-count follow-ups through the web, Android and iOS API paths.
 
 The older cost/setup documents describe the retired prototype. This README and the
 current configuration template describe the replacement implementation.

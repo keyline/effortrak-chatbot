@@ -1,0 +1,24 @@
+{
+  "local_date": "2026-11-25",
+  "regression_tests_passed": 602,
+  "headcount_tests_passed": 31,
+  "verified": [
+    "Distinct employee counts replace inherited list grouping",
+    "Employee-day measures remain separate",
+    "Explicit breakdown dimensions are preserved",
+    "Scalar attendance counts use a natural sentence without a duplicate table",
+    "List-to-count conversations via web/Android/iOS APIs",
+    "Restricted-field checks precede normalization",
+    "Exports use employee headcount labels"
+  ],
+  "additional_paid_model_calls": 0,
+  "real_employee_report_reconciliation": false,
+  "physical_device_acceptance": false,
+  "source_sha256": {
+    "app/query/interpreter.py": "52b30363549a57f7995f6ff20c29b16bb085f543941e9a839094743ec334fc30",
+    "app/query/instructions.py": "6ab4ab1c5dd531be8a29e9d3120532768720ef102ecb5557cf5aaafab5147965",
+    "app/query/wording.py": "ca1ba9b204b39499a9e16aef87e612d823538c62895cd6f26fc576dca665d12c",
+    "app/query/presentation.py": "848a0dde0b58be261378df6fa5a1d390dd62ef23b844fac524e94728e109cbc6",
+    "tests/test_employee_headcounts.py": "dff067f5b74180e2a0767428cbc775d36c136a70a7ab98b5881b40ffc334fa2b"
+  }
+}

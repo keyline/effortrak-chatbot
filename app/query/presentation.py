@@ -71,6 +71,22 @@ def present(data, selection, chart_type=None):
         lines.extend(
             f"{col['label']}: {display(rows[0].get(col['key']), col.get('unit', ''))}" for col in columns
         )
+    headcount = (single_summary and data['dataset'] == 'attendance' and len(columns) == 1
+                 and columns[0]['key'] == 'employee_count'
+                 and type(rows[0].get('employee_count')) is int and rows[0]['employee_count'] >= 0)
+    if headcount:
+        count = rows[0]['employee_count']
+        noun = f"{count:,} {'employee' if count == 1 else 'employees'}"
+        verb = {
+            'Present employees': 'was present' if count == 1 else 'were present',
+            'Absent employees': 'was absent' if count == 1 else 'were absent',
+            'Late arrivals': 'arrived late',
+        }.get(data.get('display_title'))
+        if verb:
+            once = ' at least once' if period.get('start') != period.get('end') else ''
+            lines = [f"{noun} {verb}{once}{context}."]
+        else:
+            lines = [f"{noun} {'is' if count == 1 else 'are'} included in the attendance report{context}."]
     if not single_summary and not employee_page:
         lines.extend(f"{name.capitalize()}: {display(value, 'hours')}" for name, value in hour_totals(data))
     if rows and not employee_page and (data.get("has_more") or data.get("offset")):
@@ -121,7 +137,8 @@ def present(data, selection, chart_type=None):
         elif has_note:
             table["note"] = note
     return AssistantReply(
-        "\n".join(lines), query_context=selection, charts=charts, tables=[table] if rows else []
+        "\n".join(lines), query_context=selection, charts=charts,
+        tables=[table] if rows and (not headcount or chart_type) else []
     )
 
 

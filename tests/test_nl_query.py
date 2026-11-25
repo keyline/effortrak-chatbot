@@ -20,6 +20,7 @@ from app.query.models import (
     strict_schema,
 )
 from app.query.presentation import charts_for
+from app.query.prompt_schema import interpretation_prompt_schema
 from app.query.store import Store
 from app.reply import AssistantReply
 from app.token_usage import TokenMeter
@@ -48,7 +49,7 @@ def test_single_interpretation_returns_backend_values_and_structured_table(backe
     assert model.call_args.kwargs["input"][0]["content"] == json.dumps(
         payload, ensure_ascii=False, separators=(",", ":")
     )
-    assert model.call_args.kwargs["tools"][0]["parameters"] == compact_interpretation_schema(
+    assert model.call_args.kwargs["tools"][0]["parameters"] == interpretation_prompt_schema(
         payload["catalogue"]
     )
     assert "Private employee name" not in json.dumps(model.call_args.kwargs)
@@ -544,7 +545,9 @@ def test_repeated_invalid_interpretation_stops_after_one_correction(backend):
     bad_plan = request()["plan"] | {"fields": ["employee_name"]}
     model = enable(client, state, [request(plan=bad_plan), request(plan=bad_plan)])
     response = send(client)
-    assert response.status_code == 502
+    assert response.status_code == 200
+    assert response.json()['data']['status'] == 'clarify'
+    assert "couldn't understand" in response.json()['data']['reply']
     assert model.await_count == 2
     assert state["query_bodies"] == []
 
@@ -571,10 +574,43 @@ def test_usage_settles_before_invalid_model_output_is_rejected(backend, tmp_path
     )
     service.client.with_options = Mock(return_value=service.client)
     service.token_meter = TokenMeter(tmp_path / "usage.sqlite3", service.backend)
-    assert send(client).status_code == 502
+    response = send(client)
+    assert response.status_code == 200
+    assert response.json()['data']['status'] == 'clarify'
     assert state["reservations"][0]["operation"] == "nl_sql_interpretation"
     assert state["settlements"][0]["state"] == "settled"
     assert state["settlements"][0]["total_tokens"] == 50
+    assert len(state['settlements']) == 2
+    assert sum(item['total_tokens'] for item in state['settlements']) == 100
+
+
+@pytest.mark.parametrize('platform', ['web', 'mobile'])
+@pytest.mark.parametrize('outputs', [[], [NS(type='message', content=[])]])
+def test_uninterpretable_response_is_a_saved_clarification_without_reading_records(backend, platform, outputs):
+    client, state = backend
+    model = enable(client, state, [])
+    model.side_effect = None
+    model.return_value = NS(status='completed', output=outputs)
+    response = send(client, 'Something about those things?', client_platform=platform)
+    assert response.status_code == 200
+    data = response.json()['data']
+    assert data['status'] == 'clarify' and "couldn't understand" in data['reply']
+    assert data['tables'] == [] and data['artifacts'] == []
+    assert model.await_count == 1 and state['query_bodies'] == []
+    history = client.get('/v1/conversations/' + data['conversation_id'], headers=headers())
+    assert history.status_code == 200
+    assert data['reply'] in history.text
+
+
+def test_incomplete_provider_response_remains_a_service_failure(backend):
+    client, state = backend
+    model = enable(client, state, [])
+    model.side_effect = None
+    model.return_value = NS(status='incomplete', output=[])
+    response = send(client)
+    assert response.status_code == 502
+    assert 'temporarily unavailable' in response.json()['message']
+    assert state['query_bodies'] == []
 
 
 def test_same_user_concurrent_turn_gets_busy_without_resetting_conversation(backend):
@@ -640,7 +676,7 @@ def test_concurrent_load_is_bounded_per_company_without_server_errors(backend):
 
     def question(user):
         return client.post(
-            "/v1/chat", headers=headers(user=user), json={"message": "Count employees"}
+            "/v1/chat", headers=headers(user=user), json={"message": "Count my employee record"}
         ).status_code
 
     with ThreadPoolExecutor(max_workers=16) as pool:

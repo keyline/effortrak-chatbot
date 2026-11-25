@@ -8,6 +8,8 @@ from pydantic import Field, ValidationInfo, model_validator
 from app.schemas import StrictModel
 
 SNAPSHOT_DATASETS = ("employees", "assets", "lms_leads")
+DATED_SPECIALIZED_REPORTS = ('late_punchin', 'punch_locations', 'work_summary', 'visits', 'client_locations')
+OPTIONALLY_DATED_SPECIALIZED_REPORTS = ('last_location', 'lms_location')
 
 
 class Condition(StrictModel):
@@ -205,7 +207,7 @@ class Interpretation(StrictModel):
         "product_overview",
     ]
     clarification: (
-        Literal["period", "subject", "metric", "report", "selection"] | None
+        Literal["period", "subject", "metric", "report", "selection", "request", "attendance_recency"] | None
     ) = None
     plan: QueryPlan | None = None
     specialized: "SpecializedPlan | None" = None
@@ -254,12 +256,27 @@ class SpecializedPlan(StrictModel):
     limit: int = Field(default=20, ge=1, le=50)
     page: int = Field(default=1, ge=1, le=1000)
 
+    @model_validator(mode='after')
+    def reporting_period(self):
+        if self.kind not in DATED_SPECIALIZED_REPORTS + OPTIONALLY_DATED_SPECIALIZED_REPORTS:
+            if self.start_date is not None or self.end_date is not None:
+                raise ValueError('Specialized snapshot reports do not accept a date range.')
+            return self
+        if self.kind in OPTIONALLY_DATED_SPECIALIZED_REPORTS and self.start_date is None and self.end_date is None:
+            return self
+        maximum = 31 if self.kind == 'work_summary' else 93
+        if (self.start_date is None or self.end_date is None
+                or not 0 <= (self.end_date - self.start_date).days < maximum):
+            raise ValueError('Specialized dated reports require both dates within the supported range.')
+        return self
+
 
 Interpretation.model_rebuild()
 
 
 class EmployeeSubject(StrictModel):
-    kind: Literal["self", "employee", "company", "previous", "unspecified"]
+    kind: Literal["self", "employee", "company", "previous", "unspecified"] = Field(
+        description="Whose records: my own=self; named person=employee; my company, employees/staff, employee-wise/by employee/per employee=company. Recipient-only me is not self. Use unspecified only when neither a person nor a cohort is identified.")
     employee_name: str | None = Field(default=None, min_length=2, max_length=120)
     employee_id: int | None = Field(default=None, gt=0)
 
@@ -293,6 +310,21 @@ def strict_schema(model):
                 visit(value)
 
     visit(schema)
+    if 'SpecializedPlan' in schema.get('$defs', {}):
+        base = schema['$defs']['SpecializedPlan']
+        kinds = SpecializedPlan.model_fields['kind'].annotation.__args__
+        branches = []
+        for selected, dated in [
+            (list(DATED_SPECIALIZED_REPORTS + OPTIONALLY_DATED_SPECIALIZED_REPORTS), True),
+            ([kind for kind in kinds if kind not in DATED_SPECIALIZED_REPORTS], False),
+        ]:
+            branch = deepcopy(base)
+            props = branch['properties']
+            props['kind'] = {'type': 'string', 'enum': selected}
+            for key in ('start_date', 'end_date'):
+                props[key] = {'type': 'string', 'format': 'date'} if dated else {'type': 'null'}
+            branches.append(branch)
+        schema['$defs']['SpecializedPlan'] = {'anyOf': branches}
     return schema
 
 

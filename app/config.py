@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     chat_mode: Literal['demo', 'openai'] = 'demo'
     openai_api_key: SecretStr = SecretStr('')
     openai_model: str = ''
+    openai_reasoning_effort: Literal['none', 'low', 'medium', 'high', 'xhigh', 'max'] | None = None
     ai_token_metering_enabled: bool = False
     ai_help_llm_fallback_enabled: bool = False
     ai_help_followups_enabled: bool = False

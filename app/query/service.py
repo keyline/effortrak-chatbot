@@ -27,6 +27,8 @@ CLARIFICATIONS = {
     "metric": "Do you mean attendance hours, booked timesheet effort, planned task hours, or tracked productive/idle time?",
     "report": "What information would you like to see?",
     "selection": "Could you share the employee or project name and the details you'd like to see?",
+    "request": "I couldn't understand which report you need. Please tell me what you'd like to see, whose records to check and the date or period.",
+    "attendance_recency": "Do you mean the most recent day with a punch-in, or the latest date in your attendance report? Please also tell me the period you'd like me to check.",
 }
 
 
@@ -62,6 +64,8 @@ class ChatService:
             await self.client.close()
 
     async def create_response(self, identity, operation, **kwargs):
+        if self.settings.openai_reasoning_effort is not None:
+            kwargs['reasoning'] = {'effort': self.settings.openai_reasoning_effort}
         if self.token_meter:
             return await self.token_meter.create(
                 self.client, identity, operation, **kwargs
@@ -156,9 +160,14 @@ class ChatService:
                 [],
             )
         if selection.action == "clarify":
+            question = message
+            previous_question = context.get('pending_question')
+            if isinstance(previous_question, str) and len(previous_question) + len(message) + 1 <= 4000:
+                question = previous_question + '\n' + message
             pending = {
                 "kind": "nl_query",
                 "question": message,
+                "pending_question": question,
                 "plan": selection.plan.model_dump(mode="json")
                 if selection.plan
                 else None,

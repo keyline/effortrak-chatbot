@@ -1,0 +1,526 @@
+{
+  "checked_at": "2026-11-24T15:38:16.937531+00:00",
+  "model": "gpt-6-luna",
+  "reasoning_effort": "none",
+  "regression_tests": {
+    "passed": 523,
+    "failed": 0
+  },
+  "input_tokens": {
+    "baseline": 8547,
+    "optimized": 6191
+  },
+  "baseline_ref": "3a0acd19ae75e905d7411758b83077024662f819",
+  "input_reduction_percent": 27.6,
+  "paid_evaluation": {
+    "approved_max_usd": 0.1,
+    "approved_max_generation_calls": 64,
+    "generation_calls": 64,
+    "conservative_estimated_cost_usd": 0.052682,
+    "final_acceptance": {
+      "passed": 20,
+      "total": 20
+    },
+    "rounds": [
+      {
+        "checked_at": "2026-11-24T15:26:41.432259+00:00",
+        "case_count": 32,
+        "passed": 19,
+        "model_calls": 32,
+        "conservative_cost_usd": 0.025855,
+        "results": [
+          {
+            "case": "attendance_typo",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 4464
+          },
+          {
+            "case": "attendance_paraphrase",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 2309
+          },
+          {
+            "case": "present",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3494
+          },
+          {
+            "case": "late",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3035
+          },
+          {
+            "case": "absent",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3271
+          },
+          {
+            "case": "frequent",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 2906
+          },
+          {
+            "case": "threshold",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3003
+          },
+          {
+            "case": "pie_status",
+            "passed": true,
+            "latency_ms": 2850
+          },
+          {
+            "case": "fixed_time",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3181
+          },
+          {
+            "case": "ambiguous_hours",
+            "passed": true,
+            "latency_ms": 2255
+          },
+          {
+            "case": "missing_period",
+            "passed": true,
+            "latency_ms": 2032
+          },
+          {
+            "case": "unclear_request",
+            "passed": true,
+            "latency_ms": 2089
+          },
+          {
+            "case": "unintelligible",
+            "passed": true,
+            "latency_ms": 1993
+          },
+          {
+            "case": "latest_match",
+            "passed": true,
+            "latency_ms": 2462
+          },
+          {
+            "case": "named_employee",
+            "passed": true,
+            "latency_ms": 2777
+          },
+          {
+            "case": "company_scope",
+            "passed": true,
+            "latency_ms": 2965
+          },
+          {
+            "case": "effort_project",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3186
+          },
+          {
+            "case": "tasks",
+            "passed": true,
+            "latency_ms": 2660
+          },
+          {
+            "case": "leave",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "scope",
+            "latency_ms": 2775
+          },
+          {
+            "case": "leave_reason_admin",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 2709
+          },
+          {
+            "case": "leave_reason_employee",
+            "passed": true,
+            "latency_ms": 2454
+          },
+          {
+            "case": "private_data",
+            "passed": true,
+            "latency_ms": 2018
+          },
+          {
+            "case": "injection",
+            "passed": true,
+            "latency_ms": 2044
+          },
+          {
+            "case": "mutation",
+            "passed": true,
+            "latency_ms": 2530
+          },
+          {
+            "case": "assets_current",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3096
+          },
+          {
+            "case": "asset_history",
+            "passed": true,
+            "latency_ms": 2642
+          },
+          {
+            "case": "employees",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "scope",
+            "latency_ms": 2536
+          },
+          {
+            "case": "lms_stages",
+            "passed": true,
+            "latency_ms": 2732
+          },
+          {
+            "case": "lms_done",
+            "passed": true,
+            "latency_ms": 2910
+          },
+          {
+            "case": "live_tracking",
+            "passed": true,
+            "latency_ms": 2801
+          },
+          {
+            "case": "new_report",
+            "passed": true,
+            "latency_ms": 2530
+          },
+          {
+            "case": "followup_date",
+            "passed": true,
+            "latency_ms": 2228
+          }
+        ]
+      },
+      {
+        "checked_at": "2026-11-24T15:28:34.330454+00:00",
+        "case_count": 4,
+        "passed": 2,
+        "model_calls": 4,
+        "conservative_cost_usd": 0.003296,
+        "results": [
+          {
+            "case": "attendance_typo",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3761
+          },
+          {
+            "case": "leave",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 4193
+          },
+          {
+            "case": "assets_current",
+            "action": "clarify",
+            "clarification": "subject",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 4126
+          },
+          {
+            "case": "employees",
+            "action": "query",
+            "clarification": null,
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "scope",
+            "latency_ms": 2770
+          }
+        ]
+      },
+      {
+        "checked_at": "2026-11-24T15:29:50.848647+00:00",
+        "case_count": 7,
+        "passed": 6,
+        "model_calls": 7,
+        "conservative_cost_usd": 0.005856,
+        "results": [
+          {
+            "case": "attendance_typo",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3938
+          },
+          {
+            "case": "attendance_paraphrase",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3338
+          },
+          {
+            "case": "present",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3589
+          },
+          {
+            "case": "frequent",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3856
+          },
+          {
+            "case": "effort_project",
+            "action": "clarify",
+            "clarification": "subject",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3524
+          },
+          {
+            "case": "assets_current",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3629
+          },
+          {
+            "case": "employees",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3039
+          }
+        ]
+      },
+      {
+        "checked_at": "2026-11-24T15:31:02.970791+00:00",
+        "case_count": 1,
+        "passed": 0,
+        "model_calls": 1,
+        "conservative_cost_usd": 0.000832,
+        "results": [
+          {
+            "case": "effort_project",
+            "action": "clarify",
+            "clarification": "subject",
+            "passed": false,
+            "error_type": "AssertionError",
+            "failed_check": "action=clarify",
+            "latency_ms": 3078
+          }
+        ]
+      },
+      {
+        "checked_at": "2026-11-24T15:32:26.270895+00:00",
+        "case_count": 20,
+        "passed": 20,
+        "model_calls": 20,
+        "conservative_cost_usd": 0.016843,
+        "results": [
+          {
+            "case": "late",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 4002
+          },
+          {
+            "case": "absent",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3785
+          },
+          {
+            "case": "threshold",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 4097
+          },
+          {
+            "case": "pie_status",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3823
+          },
+          {
+            "case": "fixed_time",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 5009
+          },
+          {
+            "case": "ambiguous_hours",
+            "action": "clarify",
+            "clarification": "metric",
+            "passed": true,
+            "latency_ms": 2913
+          },
+          {
+            "case": "missing_period",
+            "action": "clarify",
+            "clarification": "period",
+            "passed": true,
+            "latency_ms": 2329
+          },
+          {
+            "case": "clarification_answer",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 3611
+          },
+          {
+            "case": "unintelligible",
+            "action": "clarify",
+            "clarification": "request",
+            "passed": true,
+            "latency_ms": 3354
+          },
+          {
+            "case": "latest_match",
+            "action": "clarify",
+            "clarification": "period",
+            "passed": true,
+            "latency_ms": 4249
+          },
+          {
+            "case": "named_employee",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 4619
+          },
+          {
+            "case": "effort_project",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 5457
+          },
+          {
+            "case": "tasks",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 11375
+          },
+          {
+            "case": "leave",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 8658
+          },
+          {
+            "case": "leave_reason_admin",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 7580
+          },
+          {
+            "case": "leave_reason_employee",
+            "action": "denied",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 5988
+          },
+          {
+            "case": "private_data",
+            "action": "denied",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 6991
+          },
+          {
+            "case": "injection",
+            "action": "denied",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 7090
+          },
+          {
+            "case": "lms_stages",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 7649
+          },
+          {
+            "case": "lms_done",
+            "action": "query",
+            "clarification": null,
+            "passed": true,
+            "latency_ms": 12271
+          }
+        ]
+      }
+    ]
+  },
+  "source_sha256": {
+    "app\\query\\instructions.py": "6a07a3b5e4653f863235ba4de6c11078c70fb5142ce1410505e7f32986092936",
+    "app\\query\\interpreter.py": "5c1be7b88683d858b058042114ad301116bd14db6a705594a6f7ad0106da287e",
+    "app\\query\\models.py": "b5d9e187cdf9e78e5eca6e9f0e3370a622488be35a5401494e9de476c8380840",
+    "app\\query\\prompt_schema.py": "5adc7613b51d3c7e5695afacc436b7cf43be8f08d839fcaca004c1fe04929eed",
+    "app\\query\\service.py": "e1565a177c78bc638280974ae80877b3be14ebadd702a085145ce8cd2b8f4116",
+    "app\\query\\subjects.py": "d9c6a4ff37f95c8bea01117ed2c211af7b19a18d8c6b0454c84b8441c9dad152"
+  },
+  "not_verified": [
+    "Actual company report reconciliation",
+    "Deployed role/module/tenant permissions",
+    "Production-scale load and multi-host recovery",
+    "Physical Android/iOS and browser acceptance"
+  ],
+  "production_signoff": false,
+  "attendance_recency_followup_fix": {
+    "local_date": "2026-11-24",
+    "regression_tests_passed": 571,
+    "new_recency_tests_passed": 48,
+    "scope": [
+      "Clarify ambiguous latest attendance wording",
+      "Prevent stale late-report context in recency requests",
+      "Validate specialized reporting periods before backend access"
+    ],
+    "additional_paid_model_calls": 0,
+    "real_employee_report_results_verified": false,
+    "physical_device_acceptance_verified": false,
+    "earlier_live_benchmark_applies_to_earlier_source": true,
+    "source_sha256": {
+      "app/query/interpreter.py": "b0c50c7e0bbb23fb4044be08c87a8e4a0632ebc92c61b327bfcce96a794ac12c",
+      "app/query/models.py": "c8ad66bbf45aba104f8b52877b5e5e64d8268422dbed1d47988dfa2cb583a2f7",
+      "app/query/service.py": "f88360bc869e18090eef5992f3a50c46cc57751ef4f075582f52af2e10364655",
+      "app/query/instructions.py": "9ffb3d8b2b4035a5b039d86efe2fed9029a11e975c33749a11163cf3005ef15c",
+      "tests/test_attendance_recency.py": "788fc38d9b116be37ce09a2c281f75922291be0853e3f3acb664a898596fefc4"
+    }
+  }
+}

@@ -12,6 +12,7 @@ from app.query.models import (
     QueryPlan,
     SNAPSHOT_DATASETS,
     SpecializedPlan,
+    DATED_SPECIALIZED_REPORTS,
     compact_interpretation_schema,
     interpretation_schema,
 )
@@ -43,7 +44,9 @@ def test_new_company_cohort_replaces_previous_personal_selector():
     assert result.plan.scope == "company" and result.plan.employee_id is None
 
 
-@pytest.mark.parametrize("message", ["Show my attendance", "Which records are mine?", "Show records for myself", "Am I present?"])
+@pytest.mark.parametrize("message", ["Show my attendance", "Which records are mine?", "Show records for myself", "Am I present?",
+    "Which laptops are assigned to me?", "Show equipment issued to me", "What assets are owned by me?",
+    "Which devices are allocated to me?", "Show assets belonging to me"])
 def test_explicit_own_subject_remains_available(message):
     result = bind_subject(Interpretation(action="query", plan={"dataset":"employees"}),
         EmployeeSubject(kind="self"), message, {}, IDENTITY)
@@ -107,7 +110,8 @@ def test_provider_subject_branches_enforce_runtime_combinations(make_schema, kin
     "kind", SpecializedPlan.model_fields["kind"].annotation.__args__
 )
 def test_specialized_reports_also_bind_a_dropped_employee(kind):
-    selection = Interpretation(action="specialized", specialized={"kind": kind})
+    dates = {'start_date': '2026-11-01', 'end_date': '2026-11-20'} if kind in DATED_SPECIALIZED_REPORTS else {}
+    selection = Interpretation(action="specialized", specialized={"kind": kind, **dates})
     result = bind_subject(
         selection,
         EmployeeSubject(**NAMED),
@@ -390,7 +394,8 @@ def test_missing_subject_cannot_bypass_guard_with_old_flat_output(backend):
     response = client.post(
         "/v1/chat", headers=headers(), json={"message": "Show my records"}
     )
-    assert response.status_code == 502
+    assert response.status_code == 200
+    assert response.json()['data']['status'] == 'clarify'
     assert not state["query_bodies"]
     assert model.await_count == 2
 

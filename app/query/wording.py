@@ -46,6 +46,8 @@ def report_view(data):
     count_label = {"late":"Days late", "present":"Days present", "absent":"Days absent"}.get(cohort,
         "Days" if 'status' in plan.get('group_by', []) else "Days covered")
     columns = [{**col, "label":count_label} if col["key"] == "employee_days" else col for col in columns]
+    headcount_label = {"late":"Employees late", "present":"Employees present", "absent":"Employees absent"}.get(cohort, "Employees")
+    columns = [{**col, "label":headcount_label} if col["key"] == "employee_count" else col for col in columns]
     # Distinct headcount is redundant only when every displayed employee group is exactly one person.
     per_employee = plan.get("mode") == "aggregate" and bool(set(plan.get("group_by", [])) & {"employee_id", "employee_name"})
     if (per_employee and data.get("rows") and any(col["key"] == "employee_days" for col in columns)

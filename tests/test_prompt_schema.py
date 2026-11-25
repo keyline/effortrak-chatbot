@@ -1,12 +1,30 @@
 """Token optimization must retain the complete original model context."""
 
 from copy import deepcopy
+import json
 
 import pytest
 from pydantic import ValidationError
 
 from app.query.models import QueryPlan, compact_interpretation_schema
-from app.query.prompt_schema import interpretation_prompt_context, interpretation_prompt_schema
+from app.query.prompt_schema import (
+    interpretation_prompt_catalogue, interpretation_prompt_context, interpretation_prompt_schema,
+)
+
+
+def expanded(schema):
+    """Compare every constraint after resolving local refs, ignoring UI titles."""
+    def visit(node):
+        if isinstance(node, dict):
+            if '$ref' in node:
+                assert set(node) == {'$ref'}
+                assert node['$ref'].startswith('#/$defs/')
+                return visit(schema['$defs'][node['$ref'].rsplit('/', 1)[-1]])
+            return {key: visit(value) for key, value in node.items() if key not in ('$defs', 'title')}
+        if isinstance(node, list):
+            return [visit(value) for value in node]
+        return node
+    return visit(schema)
 
 
 @pytest.mark.parametrize("dataset", QueryPlan.model_fields["dataset"].annotation.__args__)
@@ -18,12 +36,12 @@ def test_prompt_preserves_full_schema_and_all_business_rules(dataset):
         "restricted_fields": {"reason": ["ADMIN", "SUPER ADMIN"]},
     }}}
     before = deepcopy(catalogue)
-    assert interpretation_prompt_schema(catalogue) == compact_interpretation_schema(catalogue)
+    assert expanded(interpretation_prompt_schema(catalogue)) == expanded(compact_interpretation_schema(catalogue))
     assert catalogue == before
 
 
 def test_empty_catalogue_preserves_specialized_and_refinement_shapes():
-    assert interpretation_prompt_schema({}) == compact_interpretation_schema({})
+    assert expanded(interpretation_prompt_schema({})) == expanded(compact_interpretation_schema({}))
 
 
 def test_schema_cache_tracks_catalogue_changes_and_returns_independent_copies():
@@ -46,7 +64,8 @@ def test_compact_schema_retains_mode_and_snapshot_period_constraints():
         name: {"fields": ["employee_name"], "metrics": ["record_count"]}
         for name in QueryPlan.model_fields["dataset"].annotation.__args__
     }}
-    branches = interpretation_prompt_schema(catalogue)["$defs"]["QueryPlan"]["anyOf"]
+    schema = interpretation_prompt_schema(catalogue)
+    branches = expanded(schema)["properties"]["selection"]["anyOf"][0]["properties"]["plan"]["anyOf"]
     assert len(branches) == 4
     for branch in branches:
         props = branch["properties"]
@@ -126,3 +145,38 @@ def test_compact_previous_selection_preserves_cohort_and_does_not_mutate_context
     assert "employee_name" not in prompt["plan"]
     prompt["plan"]["filters"].clear()
     assert context["plan"]["filters"] == before["plan"]["filters"]
+
+
+def test_shared_schema_cuts_size_without_removing_any_constraint_or_capability():
+    catalogue = {'datasets': {name: {} for name in QueryPlan.model_fields['dataset'].annotation.__args__}}
+    original = compact_interpretation_schema(catalogue)
+    optimized = interpretation_prompt_schema(catalogue)
+    assert expanded(optimized) == expanded(original)
+    assert len(json.dumps(optimized)) < len(json.dumps(original)) * .80
+
+
+def test_catalogue_compaction_keeps_distinct_business_rules_and_restrictions():
+    catalogue = {'datasets': {
+        'leave': {'description': 'Whole-request duration.', 'notice': 'Whole-request duration.',
+                  'restricted_fields': {'reason': ['ADMIN']}, 'fields': {'reason': 'string'}},
+        'attendance': {'description': 'Punch-in defines presence.', 'notice': 'Hours can be incomplete.'},
+    }}
+    before = deepcopy(catalogue)
+    prompt = interpretation_prompt_catalogue(catalogue)
+    assert catalogue == before
+    assert set(prompt['datasets']) == set(catalogue['datasets'])
+    assert 'notice' not in prompt['datasets']['leave']
+    assert prompt['datasets']['leave']['restricted_fields'] == {'reason': ['ADMIN']}
+    assert prompt['datasets']['leave']['fields_by_type'] == {'string': ['reason']}
+    assert prompt['datasets']['attendance'] == catalogue['datasets']['attendance']
+
+
+def test_catalogue_grouping_preserves_every_typed_field_and_metric_unit():
+    catalogue = {'datasets': {'attendance': {
+        'fields': {'employee_name': 'string', 'punch_in': 'string', 'date': 'date'},
+        'metrics': {'present_days': 'employee-days', 'employee_days': 'employee-days', 'attendance_hours': 'hours'},
+    }}}
+    metadata = interpretation_prompt_catalogue(catalogue)['datasets']['attendance']
+    for original, compact in [('fields', 'fields_by_type'), ('metrics', 'metrics_by_unit')]:
+        reconstructed = {name: value for value, names in metadata[compact].items() for name in names}
+        assert reconstructed == catalogue['datasets']['attendance'][original]
